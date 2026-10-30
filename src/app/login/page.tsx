@@ -2,6 +2,7 @@ import Image from "next/image";
 import { redirect } from "next/navigation";
 
 import { Button, Field, Input, Notice } from "@/components/ui";
+import { ConfigurationRequise, configurationComplete } from "@/components/app/configuration-requise";
 import { getSession } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
 
@@ -12,11 +13,19 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ erreur?: string; next?: string }>;
 }) {
+  if (!configurationComplete()) return <ConfigurationRequise />;
+
   const session = await getSession();
   if (session) redirect("/");
 
   const params = await searchParams;
-  const brand = await getSetting("brand");
+
+  let brand;
+  try {
+    brand = await getSetting("brand");
+  } catch (error) {
+    return <ConfigurationRequise detail={(error as Error).message} />;
+  }
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-2">
