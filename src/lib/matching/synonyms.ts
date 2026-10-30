@@ -175,10 +175,26 @@ for (const [concept, phrases] of Object.entries(SYNONYM_GROUPS)) {
   const tokens = new Set<string>();
   for (const phrase of phrases) {
     const phraseTokens = tokenize(phrase);
-    for (const token of phraseTokens) tokens.add(token);
-    // Les expressions de plusieurs mots sont aussi indexées comme bigrammes,
-    // afin que « intelligence artificielle » déclenche le concept plus fort
-    // que « intelligence » seul.
+    if (phraseTokens.length === 0) continue;
+
+    // Un mot seul dans la liste déclenche le concept : c'est ce qu'il désigne.
+    if (phraseTokens.length === 1) {
+      tokens.add(phraseTokens[0]);
+      continue;
+    }
+
+    // Une expression de plusieurs mots ne déclenche que par ses bigrammes.
+    //
+    // Indexer aussi ses mots pris isolément faisait de chacun un déclencheur à
+    // lui seul, ce qui produisait des concepts omniprésents et faux : par
+    // « organisme de formation », le mot « formation » déclenchait Qualiopi ;
+    // par « marché public », le mot « public » déclenchait la commande
+    // publique sur tout avis de marché ; par « outils collaboratifs », le mot
+    // « outils » déclenchait la bureautique sur un marché d'outils d'IA.
+    // Mesuré sur le référentiel, « Intelligence artificielle » ressortait
+    // ainsi sur 60 % des fiches et « Gestion de projet » sur 75 % : des
+    // concepts présents partout ne distinguent plus rien, et rapprochaient des
+    // sujets sans rapport.
     for (let i = 0; i < phraseTokens.length - 1; i += 1) {
       tokens.add(`${phraseTokens[i]}_${phraseTokens[i + 1]}`);
     }

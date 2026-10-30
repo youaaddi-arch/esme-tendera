@@ -7,7 +7,7 @@ import type { Training } from "@prisma/client";
 
 import { runMatching } from "../src/lib/matching/engine";
 import { detectConcepts, expandWithConcepts } from "../src/lib/matching/synonyms";
-import { tokenize, tokenizeWithBigrams } from "../src/lib/matching/text";
+import { cosineWithSupport, termVector, tokenize, tokenizeWithBigrams } from "../src/lib/matching/text";
 import { formationsVoisines } from "../src/data/formations-voisines";
 import { ionisInstitutions } from "../src/data/ionis";
 
@@ -155,10 +155,65 @@ describe("normalisation lexicale", () => {
   });
 });
 
+describe("appui lexical", () => {
+  it("distingue une proximité thématique d'une coïncidence sur un mot", () => {
+    const idf = new Map<string, number>();
+    // Un mot générique, lourd parce que rare dans un petit corpus, et des
+    // mots de domaine au poids comparable.
+    for (const term of ["generiqu", "solair", "photovoltaiqu", "onduleur", "raccordement"]) {
+      idf.set(term, 3);
+    }
+
+    const coincidence = cosineWithSupport(
+      termVector(["generiqu", "generiqu", "generiqu", "autre"]),
+      termVector(["generiqu", "generiqu", "generiqu", "different"]),
+      idf,
+    );
+    const thematique = cosineWithSupport(
+      termVector(["solair", "photovoltaiqu", "onduleur", "raccordement"]),
+      termVector(["solair", "photovoltaiqu", "onduleur", "raccordement"]),
+      idf,
+    );
+
+    assert.ok(coincidence.support < 1.5, `support de coïncidence trop haut : ${coincidence.support}`);
+    assert.ok(thematique.support > 3, `support thématique trop bas : ${thematique.support}`);
+  });
+
+  it("retire le vocabulaire administratif sans contenu", () => {
+    const tokens = tokenize("Actions de formation dans le cadre de la mise en oeuvre du dispositif");
+    for (const empty of ["action", "cadr", "mise", "oeuvr", "dispositif"]) {
+      assert.ok(!tokens.includes(empty), `« ${empty} » ne devrait pas être retenu : ${tokens.join(",")}`);
+    }
+    // « formation » est tronqué en « form » par la morphologie légère.
+    assert.ok(tokens.includes("form"), `le sujet doit survivre au filtrage : ${tokens.join(",")}`);
+  });
+});
+
 describe("expansion par synonymes", () => {
   it("relie le vocabulaire acheteur au concept métier", () => {
     const concepts = detectConcepts("montée en compétences des agents");
     assert.ok(concepts.includes("@formation"), `concepts : ${concepts.join(", ")}`);
+  });
+
+  it("n'indexe pas les mots isolés d'une expression de plusieurs mots", () => {
+    // L'index inversé enregistrait chaque mot d'une expression comme
+    // déclencheur à lui seul : par « organisme de formation », le mot
+    // « formation » déclenchait Qualiopi ; par « marché public », le mot
+    // « public » déclenchait la commande publique sur tout avis ; par
+    // « outils collaboratifs », le mot « outils » déclenchait la bureautique.
+    // Résultat mesuré sur le référentiel : « Intelligence artificielle »
+    // ressortait sur 60 % des fiches, « Gestion de projet » sur 75 %.
+    assert.ok(
+      !detectConcepts("outils de pilotage").includes("@bureautique"),
+      "« outils » seul ne doit pas déclencher la bureautique",
+    );
+    assert.ok(
+      !detectConcepts("réunion publique de quartier").includes("@achat_public"),
+      "« public » seul ne doit pas déclencher la commande publique",
+    );
+    // Les expressions complètes, elles, déclenchent toujours.
+    assert.ok(detectConcepts("fourniture d'outils collaboratifs").includes("@bureautique"));
+    assert.ok(detectConcepts("passation d'un marché public").includes("@achat_public"));
   });
 
   it("reconnaît la cybersécurité sous ses formulations administratives", () => {
@@ -211,8 +266,50 @@ describe("moteur de matching", () => {
       WEIGHTS,
     );
 
-    assert.ok(outcome.scoreGlobal >= 35, `score global trop bas : ${outcome.scoreGlobal}`);
+    // Ce que ce cas doit garantir, c'est la détection — pas une valeur de
+    // score. L'assertion portait sur un seuil chiffré, devenu trompeur après
+    // le resserrage du moteur : l'échelle entière s'est abaissée, les
+    // similarités n'étant plus gonflées par du vocabulaire administratif ni
+    // par des concepts omniprésents. On vérifie donc ce qui compte vraiment,
+    // à savoir que la consultation est reconnue comme de la formation, reste
+    // dans le périmètre, et fait remonter des fiches pertinentes en tête.
+    assert.ok(outcome.isFormation, "la consultation aurait dû être reconnue comme de la formation");
+    assert.notEqual(outcome.nature, "HORS_CHAMP");
     assert.ok(outcome.matches.length > 0);
+    assert.ok(
+      outcome.matches.slice(0, 3).some((match) => /accompagnement|transformation|changement/i.test(match.title)),
+      `attendu une fiche d'accompagnement en tête, reçu ${outcome.matches.slice(0, 3).map((m) => m.title).join(" | ")}`,
+    );
+  });
+
+  it("ne rapproche pas deux sujets qui ne partagent que du vocabulaire administratif", () => {
+    // Cas mesuré sur un avis réel : « Actions de formation — Risques amiante
+    // dans la construction » ressortait à 58/100 face à une fiche de stratégie
+    // IA, dont 62 % de la similarité portée par le seul mot « action ».
+    const outcome = runMatching(
+      {
+        title: "Actions de formation dans le cadre de campusAtlas",
+        objectSummary:
+          "Actions de formation dans le cadre de campusAtlas - thématique « Risques amiante dans la Construction DROM (Guyane, Martinique, Guadeloupe) ».",
+      },
+      referential,
+      WEIGHTS,
+    );
+
+    assert.ok(outcome.isFormation, "il s'agit bien d'un marché de formation");
+    assert.ok(
+      outcome.scoreCatalogue < 30,
+      `l'amiante n'est pas au catalogue ESME : score attendu bas, reçu ${outcome.scoreCatalogue}`,
+    );
+    // Ce qui doit être garanti, c'est qu'aucune fiche n'est présentée comme
+    // une vraie correspondance. Le catalogue ne couvre pas l'amiante : il est
+    // normal que des fiches apparaissent en bas de liste, il ne l'est pas
+    // qu'elles obtiennent un score qui ferait croire à une adéquation.
+    const meilleure = outcome.matches[0];
+    assert.ok(
+      !meilleure || meilleure.score < 30,
+      `aucune fiche ne doit paraître adéquate, reçu ${meilleure?.title} à ${Math.round(meilleure?.score ?? 0)}`,
+    );
   });
 
   it("écarte une consultation hors périmètre", () => {

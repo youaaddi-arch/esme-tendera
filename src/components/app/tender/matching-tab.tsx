@@ -1,12 +1,17 @@
 "use client";
 
+import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { ActionButton, ActionForm } from "@/components/app/action-form";
 import { ScoreGauges } from "@/components/app/charts";
-import { Badge, Card, CardHeader, EmptyState, Field, Input, Notice, Table, Td, Textarea, Th } from "@/components/ui";
-import { clearOverrideAction, overrideMatchingAction, recomputeMatchingAction } from "@/app/(app)/affaires/[id]/actions";
-import { formatDateTime, natureLabels, natureTone } from "@/lib/labels";
+import {
+  Badge, Card, CardHeader, EmptyState, Field, Input, Notice, Select, Table, Td, Textarea, Th,
+} from "@/components/ui";
+import {
+  clearOverrideAction, overrideMatchingAction, recomputeMatchingAction, recordNoMatchAction,
+} from "@/app/(app)/affaires/[id]/actions";
+import { formatDateTime, natureLabels, natureTone, noMatchReasonLabels } from "@/lib/labels";
 import type { TenderDetail } from "@/lib/tender-detail";
 import type { Permission } from "@/lib/rbac";
 
@@ -21,6 +26,9 @@ export function MatchingTab({ tender, permissions }: { tender: TenderDetail; per
   const canRun = permissions.includes("matching.run");
   const canOverride = permissions.includes("matching.override");
   const result = tender.matchResult;
+  // Le champ libre devient obligatoire sur « Autre » : on suit donc la
+  // sélection côté client pour le signaler avant l'envoi.
+  const [noMatchReason, setNoMatchReason] = useState<string>(result?.noMatchReason ?? "");
 
   if (!result) {
     return (
@@ -273,6 +281,82 @@ export function MatchingTab({ tender, permissions }: { tender: TenderDetail; per
             ))}
           </ul>
         </Notice>
+
+        {/*
+          Qualification humaine d'une absence de correspondance.
+
+          Sans elle, la colonne « Sans matching » du pipeline ne distingue pas
+          les dossiers examinés et écartés du simple retard : on ne sait pas si
+          personne n'a regardé, ou si quelqu'un a regardé et conclu.
+        */}
+        {result.nature !== "FORMATION_CATALOGUE" ? (
+          <Card>
+            <CardHeader
+              title="Pourquoi cette affaire n'est pas retenue"
+              subtitle="Facultatif, mais c'est ce qui distingue un dossier écarté d'un dossier jamais ouvert."
+              action={
+                result.noMatchReason ? (
+                  <Badge tone="neutral">Qualifiée</Badge>
+                ) : (
+                  <Badge tone="warn">Non qualifiée</Badge>
+                )
+              }
+            />
+            <div className="p-5">
+              {result.noMatchAt ? (
+                <p className="mb-3 text-[12px] text-ink-500">
+                  Dernière qualification le {formatDateTime(result.noMatchAt)}.
+                </p>
+              ) : null}
+
+              {canOverride ? (
+                <ActionForm
+                  action={(formData) => recordNoMatchAction(tender.id, formData)}
+                  submitLabel="Enregistrer le motif"
+                  submitVariant="secondary"
+                  submitSize="sm"
+                >
+                  <div className="space-y-3">
+                    <Field label="Motif" hint="Laisser vide retire le motif enregistré.">
+                      <Select
+                        name="noMatchReason"
+                        value={noMatchReason}
+                        onChange={(event) => setNoMatchReason(event.target.value)}
+                      >
+                        <option value="">— Aucun —</option>
+                        {Object.entries(noMatchReasonLabels).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field
+                      label="Précision"
+                      required={noMatchReason === "AUTRE"}
+                      hint={
+                        noMatchReason === "AUTRE"
+                          ? "Motif « Autre » : obligatoire, c'est la seule trace qui restera."
+                          : "Texte libre, pour ce que la liste ne couvre pas."
+                      }
+                    >
+                      <Textarea
+                        name="noMatchNote"
+                        rows={3}
+                        defaultValue={result.noMatchNote ?? ""}
+                        placeholder="Ce qui écarte cet objet du référentiel."
+                      />
+                    </Field>
+                  </div>
+                </ActionForm>
+              ) : (
+                <p className="text-[13px] text-ink-600">
+                  {result.noMatchReason
+                    ? `${noMatchReasonLabels[result.noMatchReason]}${result.noMatchNote ? ` — ${result.noMatchNote}` : ""}`
+                    : "Aucun motif enregistré. Votre rôle ne permet pas d'en consigner un."}
+                </p>
+              )}
+            </div>
+          </Card>
+        ) : null}
 
         {canOverride ? (
           <Card>

@@ -3,9 +3,11 @@
 import Link from "next/link";
 
 import { ActionButton, ActionForm } from "@/components/app/action-form";
-import { Badge, Card, CardHeader, EmptyState, Field, Input, Notice, Table, Td, Textarea, Th } from "@/components/ui";
+import {
+  Badge, Card, CardHeader, EmptyState, Field, Input, Notice, ScorePill, Table, Td, Textarea, Th,
+} from "@/components/ui";
 import { createLotAction, spawnLotAction } from "@/app/(app)/affaires/[id]/actions";
-import { formatAmount } from "@/lib/labels";
+import { formatAmount, natureLabels, natureTone } from "@/lib/labels";
 import type { TenderDetail } from "@/lib/tender-detail";
 import type { Permission } from "@/lib/rbac";
 
@@ -21,12 +23,27 @@ export function LotsTab({ tender, permissions }: { tender: TenderDetail; permiss
   const canCreate = permissions.includes("tender.create");
   const spawned = new Map(tender.children.map((child) => [child.lotLabel, child]));
 
+  // Les lots proches du catalogue d'abord : sur un accord-cadre à douze lots,
+  // ce sont les deux ou trois premiers qui décident de la réponse, et les lire
+  // dans l'ordre de numérotation de l'acheteur fait perdre ce signal.
+  const scored = [...tender.lots].sort((a, b) => (b.scoreGlobal ?? -1) - (a.scoreGlobal ?? -1));
+  const interesting = scored.filter(
+    (lot) => lot.nature === "FORMATION_CATALOGUE" || lot.nature === "FORMATION_VOISINE",
+  );
+  const evaluated = scored.filter((lot) => lot.matchedAt !== null);
+
   return (
     <div className="grid gap-5 lg:grid-cols-3">
       <Card className="lg:col-span-2">
         <CardHeader
           title="Lots de la consultation"
-          subtitle={`${tender.lots.length} lot(s) identifié(s). Créez une affaire par lot pertinent pour les suivre séparément.`}
+          subtitle={
+            tender.lots.length === 0
+              ? "Aucun lot enregistré."
+              : evaluated.length === 0
+                ? `${tender.lots.length} lot(s). Affinité non calculée : lancez le matching depuis l'onglet Matching.`
+                : `${tender.lots.length} lot(s), dont ${interesting.length} proche(s) du catalogue. Classés par affinité décroissante.`
+          }
         />
 
         {tender.lots.length === 0 ? (
@@ -42,12 +59,13 @@ export function LotsTab({ tender, permissions }: { tender: TenderDetail; permiss
               <tr>
                 <Th className="w-16">N°</Th>
                 <Th>Intitulé</Th>
-                <Th className="w-44">Montant</Th>
-                <Th className="w-56">Affaire dédiée</Th>
+                <Th className="w-56">Affinité</Th>
+                <Th className="w-40">Montant</Th>
+                <Th className="w-52">Affaire dédiée</Th>
               </tr>
             </thead>
             <tbody>
-              {tender.lots.map((lot) => {
+              {scored.map((lot) => {
                 const child = spawned.get(`Lot ${lot.number}`);
                 return (
                   <tr key={lot.id}>
@@ -58,6 +76,39 @@ export function LotsTab({ tender, permissions }: { tender: TenderDetail; permiss
                       {lot.cpvCodes.length > 0 ? (
                         <p className="mt-1 font-mono text-[11px] text-ink-400">CPV {lot.cpvCodes.join(", ")}</p>
                       ) : null}
+                    </Td>
+                    <Td>
+                      {lot.matchedAt === null ? (
+                        <span className="text-[12px] text-ink-400">Non calculée</span>
+                      ) : (
+                        <>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <ScorePill value={lot.scoreGlobal ?? 0} size="sm" />
+                            {lot.nature ? (
+                              <Badge tone={natureTone(lot.nature)}>{natureLabels[lot.nature]}</Badge>
+                            ) : null}
+                          </div>
+                          {lot.scoreCatalogue !== null ? (
+                            <p className="mt-1 text-[11px] text-ink-500">
+                              Catalogue {Math.round(lot.scoreCatalogue)} · voisines{" "}
+                              {Math.round(lot.scoreVoisines ?? 0)}
+                            </p>
+                          ) : null}
+                          {lot.matchTitles.length > 0 ? (
+                            <ul className="mt-1 space-y-0.5">
+                              {lot.matchTitles.map((title) => (
+                                <li key={title} className="text-[11px] leading-snug text-ink-600">
+                                  {title}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-1 text-[11px] text-ink-400">
+                              Aucune fiche du référentiel au-dessus de 30/100.
+                            </p>
+                          )}
+                        </>
+                      )}
                     </Td>
                     <Td className="text-[13px]">
                       {formatAmount(lot.amountKind, lot.amountMinEur, lot.amountMaxEur)}
