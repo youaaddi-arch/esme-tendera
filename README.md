@@ -100,6 +100,9 @@ des consultations réelles.
 | `AUTH_SECRET` | Signature des sessions (`openssl rand -base64 48`) | oui |
 | `TENDERA_STORAGE_DIR` | Dossier de stockage documentaire (défaut `./storage`) | non |
 | `TENDERA_CRON_SECRET` | Jeton de la synchronisation quotidienne | pour la veille planifiée |
+| `CRON_SECRET` | Même rôle, sous le nom imposé par le cron Vercel | pour la veille planifiée **sur Vercel** |
+| `DATABASE_URL_UNPOOLED` | Connexion directe, utilisée pour créer le schéma | non, mais recommandée |
+| `BLOB_READ_WRITE_TOKEN` | Stockage objet, si le disque n'est pas persistant | selon l'hébergement |
 | `ANTHROPIC_API_KEY` | Moteur IA optionnel | non |
 | `TENDERA_AI_MODEL` | Modèle utilisé si une clé est fournie | non |
 | `TENDERA_SEED_PASSWORD` | Mot de passe initial des comptes du seed | non |
@@ -514,7 +517,11 @@ variables et de déclencher un déploiement :
    `POSTGRES_URL_NON_POOLING`), elle est utilisée pour la création du schéma :
    un pooler en mode transaction ne convient pas aux migrations.
 2. `AUTH_SECRET` généré (`openssl rand -base64 48`).
-3. `TENDERA_CRON_SECRET` défini et déclencheur quotidien configuré.
+3. Jeton de synchronisation défini et déclencheur quotidien configuré. Sur
+   Vercel, la variable doit s'appeler `CRON_SECRET` : le cron de la plateforme
+   ne joint un en-tête d'autorisation que sous ce nom précis, et une veille
+   authentifiée autrement se ferait refuser en 401 sans que rien ne le signale.
+   Ailleurs, `TENDERA_CRON_SECRET` suffit — la route accepte les deux.
 4. `TENDERA_STORAGE_DIR` sur un volume persistant et sauvegardé, ou
    `BLOB_READ_WRITE_TOKEN` si le système de fichiers n'est pas persistant.
 5. Déployer. Sans `DATABASE_URL`, le build réussit quand même et l'application
