@@ -100,6 +100,9 @@ des consultations réelles.
 | `AUTH_SECRET` | Signature des sessions (`openssl rand -base64 48`) | oui |
 | `TENDERA_STORAGE_DIR` | Dossier de stockage documentaire (défaut `./storage`) | non |
 | `TENDERA_CRON_SECRET` | Jeton de la synchronisation quotidienne | pour la veille planifiée |
+| `CRON_SECRET` | Même rôle, sous le nom imposé par le cron Vercel | pour la veille planifiée **sur Vercel** |
+| `DATABASE_URL_UNPOOLED` | Connexion directe, utilisée pour créer le schéma | non, mais recommandée |
+| `BLOB_READ_WRITE_TOKEN` | Stockage objet, si le disque n'est pas persistant | selon l'hébergement |
 | `ANTHROPIC_API_KEY` | Moteur IA optionnel | non |
 | `TENDERA_AI_MODEL` | Modèle utilisé si une clé est fournie | non |
 | `TENDERA_SEED_PASSWORD` | Mot de passe initial des comptes du seed | non |
@@ -501,14 +504,41 @@ chemin.
 
 ## Déploiement
 
-1. PostgreSQL 14+ provisionné, `DATABASE_URL` renseignée.
+Le build prépare la base lui-même, via `scripts/provision.mjs` : `prisma db push`
+puis le seed, avec les affaires de démonstration désactivées. Les deux opérations
+sont rejouables sans effet de bord, et sont donc relancées à chaque déploiement
+sans rien dupliquer ni réécrire un mot de passe modifié depuis l'initialisation.
+
+Sur un hébergement sans accès terminal, il suffit donc de renseigner les
+variables et de déclencher un déploiement :
+
+1. PostgreSQL 14+ provisionné, `DATABASE_URL` renseignée. Lorsque l'hébergeur
+   expose aussi une connexion directe (`DATABASE_URL_UNPOOLED` ou
+   `POSTGRES_URL_NON_POOLING`), elle est utilisée pour la création du schéma :
+   un pooler en mode transaction ne convient pas aux migrations.
 2. `AUTH_SECRET` généré (`openssl rand -base64 48`).
-3. `npx prisma migrate deploy` (ou `npm run db:push` en première installation).
-4. `npm run db:seed` — ajouter `TENDERA_SEED_DEMO=0` en production.
-5. `npm run build && npm run start`.
+3. Jeton de synchronisation défini et déclencheur quotidien configuré. Sur
+   Vercel, la variable doit s'appeler `CRON_SECRET` : le cron de la plateforme
+   ne joint un en-tête d'autorisation que sous ce nom précis, et une veille
+   authentifiée autrement se ferait refuser en 401 sans que rien ne le signale.
+   Ailleurs, `TENDERA_CRON_SECRET` suffit — la route accepte les deux.
+4. `TENDERA_STORAGE_DIR` sur un volume persistant et sauvegardé, ou
+   `BLOB_READ_WRITE_TOKEN` si le système de fichiers n'est pas persistant.
+5. Déployer. Sans `DATABASE_URL`, le build réussit quand même et l'application
+   affiche son écran de configuration au lieu de planter.
 6. Changer les mots de passe des comptes de démarrage.
-7. `TENDERA_CRON_SECRET` défini et déclencheur quotidien configuré.
-8. `TENDERA_STORAGE_DIR` sur un volume persistant et sauvegardé.
+
+`db push` est lancé **sans** `--accept-data-loss` : une évolution du schéma qui
+supprimerait une colonne fait échouer le build au lieu de détruire des données.
+Ce cas demande une intervention humaine délibérée.
+
+Sur un serveur dédié, les mêmes étapes restent disponibles à la main :
+
+```bash
+npm run db:push
+TENDERA_SEED_DEMO=0 npm run db:seed
+npm run build && npm run start
+```
 
 ### Sauvegardes
 
