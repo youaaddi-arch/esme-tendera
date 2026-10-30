@@ -720,6 +720,17 @@ model MatchResult {
   manualOverride Boolean  @default(false)
   overrideNote   String?
 
+  /// Domaine de la fiche la mieux classée, recopié ici.
+  ///
+  /// Dénormalisé à dessein : c'est le domaine que la carte affiche, et le
+  /// filtrer par la relation donnerait un autre résultat — une affaire
+  /// remonte jusqu'à vingt-cinq fiches, et filtrer sur « l'une d'elles
+  /// appartient au domaine » ramènerait des affaires dont le domaine
+  /// principal est tout autre. Recopier garantit que le filtre et l'affichage
+  /// parlent de la même chose.
+  topDomainSlug String?
+  topDomainName String?
+
   /// Qualification humaine d'une absence de correspondance.
   ///
   /// Le moteur classe ; l'humain tranche et dit pourquoi. Sans cette trace,

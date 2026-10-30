@@ -5,27 +5,34 @@
  * une évolution du moteur : l'interface propose le recalcul des affaires
  * actives, ce script couvre l'ensemble du portefeuille, archives comprises.
  *
+ * Il partage son calcul avec l'application, via `persistMatching`. Les deux
+ * avaient leur propre copie et ont divergé — le script ne faisait plus avancer
+ * l'étape du pipeline ni recopier le domaine — si bien qu'un recalcul global
+ * laissait la base dans un état différent d'un recalcul depuis l'interface.
+ *
  *     npx tsx scripts/recompute-matching.ts
  */
 import { PrismaClient } from "@prisma/client";
 
-import { runLotMatching, runMatching } from "../src/lib/matching/engine";
+import { persistMatching } from "../src/lib/matching/persist";
 import { natureLabels } from "../src/lib/labels";
 
 const prisma = new PrismaClient();
 
 async function main() {
   const [trainings, setting] = await Promise.all([
-    prisma.training.findMany({ where: { archived: false } }),
+    prisma.training.count({ where: { archived: false } }),
     prisma.setting.findUnique({ where: { key: "scoring" } }),
   ]);
 
-  if (trainings.length === 0) {
+  if (trainings === 0) {
     console.error("Référentiel vide : lancez d'abord « npm run db:seed ».");
     process.exitCode = 1;
     return;
   }
 
+  // Le réglage de pondération est lu directement : le module qui l'expose à
+  // l'application est réservé au serveur Next.
   const weights = (setting?.value as { catalogue: number; voisines: number; ionis: number } | null) ?? {
     catalogue: 60,
     voisines: 25,
@@ -33,115 +40,46 @@ async function main() {
   };
 
   const tenders = await prisma.tender.findMany({
-    include: { lots: true, analysis: true },
+    select: { id: true, reference: true },
     orderBy: { createdAt: "asc" },
   });
 
   let updated = 0;
-  let lotsUpdated = 0;
+  let preserved = 0;
   let failed = 0;
 
   for (const tender of tenders) {
-    const outcome = runMatching(
-      {
-        title: tender.title,
-        objectSummary: tender.objectSummary,
-        buyer: tender.buyer,
-        cpvCodes: tender.cpvCodes,
-        marketTypes: tender.marketTypes,
-        lots: tender.lots.map((lot) => ({
-          number: lot.number,
-          title: lot.title,
-          description: lot.description,
-        })),
-        analysis: tender.analysis
-          ? {
-              objet: tender.analysis.objet,
-              besoin: tender.analysis.besoin,
-              publics: tender.analysis.publics,
-              modalites: tender.analysis.modalites,
-              certifications: tender.analysis.certifications,
-              volumeHoraire: tender.analysis.volumeHoraire,
-            }
-          : null,
-      },
-      trainings,
-      weights,
-    );
-
-    const data = {
-      scoreCatalogue: outcome.scoreCatalogue,
-      scoreVoisines: outcome.scoreVoisines,
-      scoreIonis: outcome.scoreIonis,
-      scoreGlobal: outcome.scoreGlobal,
-      isFormation: outcome.isFormation,
-      formationSignals: outcome.formationSignals,
-      nature: outcome.nature,
-      natureLabel: outcome.natureLabel,
-      coveredSkills: outcome.coveredSkills,
-      missingSkills: outcome.missingSkills,
-      adaptableNote: outcome.adaptableNote,
-      ionisNote: outcome.ionisNote,
-      extraResources: outcome.extraResources,
-      constraints: outcome.constraints,
-      recommendation: outcome.recommendation,
-      caveats: outcome.caveats,
-      engine: outcome.engine,
-      computedAt: new Date(),
-    };
-
     try {
-      // Une affaire sans résultat de matching en reçoit un : c'est le cas des
-      // affaires importées avant la mise en service du moteur.
-      await prisma.matchResult.upsert({
-        where: { tenderId: tender.id },
-        create: { tenderId: tender.id, weights, ...data },
-        update: data,
-      });
-      updated += 1;
-
-      // Affinité lot par lot : c'est à ce niveau que l'on se positionne, et
-      // le score de l'affaire en moyenne des lots parfois très différents.
-      for (const lot of tender.lots) {
-        const lotOutcome = runLotMatching(
-          { number: lot.number, title: lot.title, description: lot.description, cpvCodes: lot.cpvCodes },
-          {
-            cpvCodes: tender.cpvCodes,
-            marketTypes: tender.marketTypes,
-            buyer: tender.buyer,
-            isFormation: outcome.isFormation,
-          },
-          trainings,
-          weights,
-        );
-        await prisma.lot.update({
-          where: { id: lot.id },
-          data: {
-            scoreCatalogue: lotOutcome.scoreCatalogue,
-            scoreVoisines: lotOutcome.scoreVoisines,
-            scoreGlobal: lotOutcome.scoreGlobal,
-            nature: lotOutcome.nature,
-            natureLabel: lotOutcome.natureLabel,
-            matchTitles: lotOutcome.matchTitles,
-            matchedAt: new Date(),
-          },
-        });
-        lotsUpdated += 1;
-      }
+      // Sans « force », un score ajusté à la main n'est pas écrasé.
+      const outcome = await persistMatching(prisma, tender.id, { weights, reason: "script" });
+      if (outcome) updated += 1;
+      else preserved += 1;
     } catch (error) {
       failed += 1;
       console.error(`  ${tender.reference} : ${(error as Error).message}`);
     }
   }
 
+  const lots = await prisma.lot.count({ where: { matchedAt: { not: null } } });
   console.log(
-    `${updated} affaire(s) et ${lotsUpdated} lot(s) recalculés${failed > 0 ? `, ${failed} en échec` : ""}.`,
+    `${updated} affaire(s) recalculée(s), ${lots} lot(s) évalués` +
+      `${preserved > 0 ? `, ${preserved} ajustement(s) manuel(s) préservé(s)` : ""}` +
+      `${failed > 0 ? `, ${failed} en échec` : ""}.`,
   );
 
   const counts = await prisma.matchResult.groupBy({ by: ["nature"], _count: { _all: true } });
   console.log("\nRépartition par appréciation :");
   for (const row of counts.sort((a, b) => b._count._all - a._count._all)) {
     console.log(`  ${natureLabels[row.nature].padEnd(38)} ${row._count._all}`);
+  }
+
+  const domains = await prisma.matchResult.groupBy({
+    by: ["topDomainName"],
+    _count: { _all: true },
+  });
+  console.log("\nRépartition par domaine de la meilleure fiche :");
+  for (const row of domains.sort((a, b) => b._count._all - a._count._all)) {
+    console.log(`  ${(row.topDomainName ?? "(aucune correspondance)").padEnd(38)} ${row._count._all}`);
   }
 }
 
