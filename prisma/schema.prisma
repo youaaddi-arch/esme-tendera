@@ -405,6 +405,22 @@ model Lot {
   /// Affaire dédiée créée pour ce lot, le cas échéant.
   spawnedTenderId String?
   relevant        Boolean    @default(true)
+
+  /// Affinité du lot avec le référentiel, calculée lot par lot.
+  ///
+  /// Le score de l'affaire mélange tous les lots : un accord-cadre de
+  /// formation à douze lots dont deux relèvent du catalogue obtient une note
+  /// moyenne qui ne décrit aucun des deux. Ces colonnes disent ce qui se joue
+  /// lot par lot — c'est à ce niveau que l'on se positionne.
+  scoreCatalogue Float?
+  scoreVoisines  Float?
+  scoreGlobal    Float?
+  nature         TenderNature?
+  natureLabel    String?
+  /// Fiches du référentiel les plus proches, libellés figés pour l'affichage.
+  matchTitles    String[]      @default([])
+  matchedAt      DateTime?
+
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
@@ -704,6 +720,17 @@ model MatchResult {
   manualOverride Boolean  @default(false)
   overrideNote   String?
 
+  /// Qualification humaine d'une absence de correspondance.
+  ///
+  /// Le moteur classe ; l'humain tranche et dit pourquoi. Sans cette trace,
+  /// une consultation écartée ne se distingue pas d'une consultation jamais
+  /// regardée, et la même erreur d'appréciation se répète d'une année sur
+  /// l'autre.
+  noMatchReason NoMatchReason?
+  /// Motif libre, obligatoire lorsque le motif retenu est « Autre ».
+  noMatchNote   String?
+  noMatchAt     DateTime?
+
   computedAt DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -739,6 +766,29 @@ enum NoGoReason {
   EXIGENCE_ELIMINATOIRE
   RISQUE_CONTRACTUEL
   DECISION_STRATEGIQUE
+  CONCURRENCE_DEFAVORABLE
+  REFERENCES_INSUFFISANTES
+  CERTIFICATION_MANQUANTE
+  ZONE_GEOGRAPHIQUE
+  VOLUME_INSUFFISANT
+  PLAN_DE_CHARGE
+  AUTRE
+}
+
+/// Pourquoi une consultation n'a pas été retenue au matching.
+///
+/// Distinct du motif de No Go : celui-ci porte sur l'adéquation de l'objet,
+/// pas sur l'opportunité de répondre. Une consultation peut très bien
+/// correspondre au catalogue et faire l'objet d'un No Go, ou l'inverse.
+enum NoMatchReason {
+  HORS_FORMATION
+  METIER_MANUEL
+  DOMAINE_NON_COUVERT
+  FORMATION_INITIALE
+  PUBLIC_INADAPTE
+  VOLUME_INSUFFISANT
+  OBJET_TROP_IMPRECIS
+  SCORE_TROP_FAIBLE
   AUTRE
 }
 
@@ -750,6 +800,18 @@ model Decision {
   status           GoNoGoStatus
   reason           NoGoReason?
   rationale        String?
+  /// Lots sur lesquels l'établissement se positionne, pour une décision GO.
+  ///
+  /// Un accord-cadre allotit souvent des besoins très différents : se
+  /// positionner sur la totalité n'a presque jamais de sens. Vide lorsque la
+  /// consultation ne comporte pas de lots, ou lorsque la décision porte sur
+  /// l'ensemble.
+  lotIds           String[]     @default([])
+  /// Libellés figés au moment de la décision.
+  ///
+  /// Un lot peut être renommé, ou l'affaire rechargée depuis un rectificatif :
+  /// l'historique doit rester lisible sans dépendre de l'état actuel des lots.
+  lotLabels        String[]     @default([])
   /// Recommandation produite par le moteur avant arbitrage humain.
   aiRecommendation String?
   aiConfidence     Float?

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { GoNoGoStatus, NoGoReason, RequirementStatus } from "@prisma/client";
+import type { GoNoGoStatus, NoGoReason, NoMatchReason, RequirementStatus } from "@prisma/client";
 import { z } from "zod";
 
 import { requireSession } from "@/lib/auth";
@@ -14,6 +14,7 @@ import { assertCan, PermissionError } from "@/lib/rbac";
 import { recomputeMatching } from "@/lib/matching/service";
 import { buildResponseWorkspace } from "@/lib/docs/workspace";
 import { runQualityReview } from "@/lib/compliance/review";
+import { noMatchReasonLabels } from "@/lib/labels";
 import { EDITABLE_TENDER_FIELDS, spawnLotTender, TenderRuleError } from "@/lib/tenders";
 
 export type ActionState = { ok: boolean; message: string } | null;
@@ -347,6 +348,72 @@ export async function updateRequirementAction(
 // Onglet 5 — matching
 // ---------------------------------------------------------------------------
 
+/**
+ * Consigne pourquoi une consultation n'a pas été retenue au matching.
+ *
+ * Sans cette trace, une consultation écartée est indiscernable d'une
+ * consultation jamais regardée : on ne sait plus si la colonne « sans
+ * matching » contient des dossiers traités ou du retard accumulé, et la même
+ * appréciation se rejoue chaque année sans que personne puisse la contester.
+ *
+ * Le motif ne touche pas aux scores : il dit ce qu'un humain en conclut.
+ */
+export async function recordNoMatchAction(tenderId: string, formData: FormData): Promise<ActionState> {
+  try {
+    return await guard("matching.override", async (session) => {
+      const raw = String(formData.get("noMatchReason") ?? "").trim();
+      const note = String(formData.get("noMatchNote") ?? "").trim();
+
+      // Champ vidé : on retire le motif plutôt que d'en garder un périmé.
+      if (!raw) {
+        await prisma.matchResult.update({
+          where: { tenderId },
+          data: { noMatchReason: null, noMatchNote: null, noMatchAt: null },
+        });
+        await recordAudit({
+          action: "matching.noMatch", entity: "Tender", entityId: tenderId, tenderId,
+          userId: session.id, summary: "Motif d'absence de correspondance retiré.",
+        });
+        refresh(tenderId);
+        return { ok: true, message: "Motif retiré." };
+      }
+
+      if (!(raw in noMatchReasonLabels)) {
+        return { ok: false, message: "Motif inconnu." };
+      }
+      const reason = raw as NoMatchReason;
+
+      // « Autre » n'informe personne : c'est le cas où le texte libre porte
+      // toute l'information, donc il devient obligatoire.
+      if (reason === "AUTRE" && note.length < 10) {
+        return { ok: false, message: "Motif « Autre » : précisez-le en toutes lettres." };
+      }
+
+      const existing = await prisma.matchResult.findUnique({ where: { tenderId }, select: { id: true } });
+      if (!existing) {
+        return { ok: false, message: "Lancez d'abord le matching : il n'y a pas encore d'appréciation à qualifier." };
+      }
+
+      await prisma.matchResult.update({
+        where: { tenderId },
+        data: { noMatchReason: reason, noMatchNote: note || null, noMatchAt: new Date() },
+      });
+
+      await recordAudit({
+        action: "matching.noMatch", entity: "Tender", entityId: tenderId, tenderId,
+        userId: session.id,
+        summary: `Absence de correspondance qualifiée : ${noMatchReasonLabels[reason]}.`,
+        payload: { motif: reason, precision: note || null },
+      });
+
+      refresh(tenderId);
+      return { ok: true, message: "Motif enregistré." };
+    });
+  } catch (error) {
+    return toState(error);
+  }
+}
+
 export async function recomputeMatchingAction(tenderId: string): Promise<ActionState> {
   try {
     return await guard("matching.run", async (session) => {
@@ -436,6 +503,7 @@ export async function recordDecisionAction(tenderId: string, formData: FormData)
       const status = String(formData.get("status") ?? "") as GoNoGoStatus;
       const rationale = String(formData.get("rationale") ?? "").trim();
       const reason = String(formData.get("reason") ?? "").trim() as NoGoReason | "";
+      const selectedLotIds = formData.getAll("lots").map(String).filter(Boolean);
 
       if (!["GO", "NO_GO", "A_DECIDER"].includes(status)) {
         return { ok: false, message: "Décision invalide." };
@@ -446,12 +514,46 @@ export async function recordDecisionAction(tenderId: string, formData: FormData)
       if (!rationale) {
         return { ok: false, message: "Motivez la décision : elle engage l'équipe et reste au journal." };
       }
+      // « Autre » ne dit rien à lui seul : c'est précisément le cas où le
+      // texte libre porte toute l'information.
+      if (status === "NO_GO" && reason === "AUTRE" && rationale.length < 15) {
+        return {
+          ok: false,
+          message: "Motif « Autre » : précisez-le en toutes lettres dans la motivation.",
+        };
+      }
+
+      const lots = await prisma.lot.findMany({
+        where: { tenderId },
+        orderBy: { number: "asc" },
+        select: { id: true, number: true, title: true },
+      });
+
+      // Un accord-cadre alloti ne se gagne pas en bloc : se positionner sans
+      // dire sur quoi ne veut rien dire, et c'est le lot qui pilote ensuite le
+      // mémoire technique et le chiffrage.
+      if (status === "GO" && lots.length > 0 && selectedLotIds.length === 0) {
+        return {
+          ok: false,
+          message: `Cette consultation comporte ${lots.length} lot(s) : indiquez celui ou ceux sur lesquels vous vous positionnez.`,
+        };
+      }
+
+      const known = new Set(lots.map((lot) => lot.id));
+      const unknown = selectedLotIds.filter((id) => !known.has(id));
+      if (unknown.length > 0) {
+        return { ok: false, message: "Un lot sélectionné n'appartient pas à cette consultation." };
+      }
+
+      const chosenLots = status === "GO" ? lots.filter((lot) => selectedLotIds.includes(lot.id)) : [];
 
       await prisma.decision.updateMany({ where: { tenderId, superseded: false }, data: { superseded: true } });
       await prisma.decision.create({
         data: {
           tenderId, status, rationale,
           reason: status === "NO_GO" ? (reason as NoGoReason) : null,
+          lotIds: chosenLots.map((lot) => lot.id),
+          lotLabels: chosenLots.map((lot) => `Lot ${lot.number} — ${lot.title}`),
           decidedById: session.id,
         },
       });
@@ -467,8 +569,14 @@ export async function recordDecisionAction(tenderId: string, formData: FormData)
       await recordAudit({
         action: "decision.record", entity: "Tender", entityId: tenderId, tenderId,
         userId: session.id,
-        summary: `Décision ${status}${reason ? ` (${reason})` : ""}.`,
-        payload: { motivation: rationale },
+        summary:
+          `Décision ${status}${reason ? ` (${reason})` : ""}` +
+          (chosenLots.length > 0 ? ` — lot(s) ${chosenLots.map((lot) => lot.number).join(", ")}` : "") +
+          ".",
+        payload: {
+          motivation: rationale,
+          lots: chosenLots.map((lot) => `Lot ${lot.number} — ${lot.title}`),
+        },
       });
 
       refresh(tenderId);
@@ -476,7 +584,9 @@ export async function recordDecisionAction(tenderId: string, formData: FormData)
         ok: true,
         message:
           status === "GO"
-            ? "GO enregistré. L'espace de préparation de la réponse a été créé."
+            ? chosenLots.length > 0
+              ? `GO enregistré sur ${chosenLots.length} lot(s). L'espace de préparation de la réponse a été créé.`
+              : "GO enregistré. L'espace de préparation de la réponse a été créé."
             : status === "NO_GO"
               ? "NO GO enregistré. L'affaire est classée ; elle reste rouvrable."
               : "Décision remise à « à décider ».",

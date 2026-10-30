@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { getSetting, type ScoringWeights } from "../settings";
 import { recordAudit } from "../audit";
-import { runMatching, type MatchingInput } from "./engine";
+import { runLotMatching, runMatching, type MatchingInput } from "./engine";
 
 /**
  * Lance le matching d'une affaire et enregistre le résultat.
@@ -129,6 +129,49 @@ export async function recomputeMatching(
         rationale: match.rationale,
       })),
     });
+  }
+
+  // Affinité lot par lot. Le score de l'affaire moyenne des lots parfois très
+  // différents : sur un accord-cadre, c'est le détail qui dit où se
+  // positionner, et la moyenne ne le dit jamais.
+  for (const lot of tender.lots) {
+    const lotOutcome = runLotMatching(
+      {
+        number: lot.number,
+        title: lot.title,
+        description: lot.description,
+        cpvCodes: lot.cpvCodes,
+      },
+      {
+        cpvCodes: tender.cpvCodes,
+        marketTypes: tender.marketTypes,
+        buyer: tender.buyer,
+        isFormation: outcome.isFormation,
+      },
+      trainings,
+      weights,
+    );
+
+    await prisma.lot.update({
+      where: { id: lot.id },
+      data: {
+        scoreCatalogue: lotOutcome.scoreCatalogue,
+        scoreVoisines: lotOutcome.scoreVoisines,
+        scoreGlobal: lotOutcome.scoreGlobal,
+        nature: lotOutcome.nature,
+        natureLabel: lotOutcome.natureLabel,
+        matchTitles: lotOutcome.matchTitles,
+        matchedAt: new Date(),
+      },
+    });
+  }
+
+  // Une affaire qui vient d'être notée quitte « AO identifiés » : cette
+  // colonne désigne ce qui n'a pas encore été évalué, pas ce qui attend une
+  // décision. Les étapes ultérieures ne sont jamais ramenées en arrière — un
+  // recalcul ne défait pas le travail déjà engagé sur le dossier.
+  if (tender.stage === "AO_IDENTIFIES") {
+    await prisma.tender.update({ where: { id: tenderId }, data: { stage: "MATCHING" } });
   }
 
   await recordAudit({

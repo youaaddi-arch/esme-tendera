@@ -9,7 +9,7 @@
  */
 import { PrismaClient } from "@prisma/client";
 
-import { runMatching } from "../src/lib/matching/engine";
+import { runLotMatching, runMatching } from "../src/lib/matching/engine";
 import { natureLabels } from "../src/lib/labels";
 
 const prisma = new PrismaClient();
@@ -38,6 +38,7 @@ async function main() {
   });
 
   let updated = 0;
+  let lotsUpdated = 0;
   let failed = 0;
 
   for (const tender of tenders) {
@@ -98,13 +99,44 @@ async function main() {
         update: data,
       });
       updated += 1;
+
+      // Affinité lot par lot : c'est à ce niveau que l'on se positionne, et
+      // le score de l'affaire en moyenne des lots parfois très différents.
+      for (const lot of tender.lots) {
+        const lotOutcome = runLotMatching(
+          { number: lot.number, title: lot.title, description: lot.description, cpvCodes: lot.cpvCodes },
+          {
+            cpvCodes: tender.cpvCodes,
+            marketTypes: tender.marketTypes,
+            buyer: tender.buyer,
+            isFormation: outcome.isFormation,
+          },
+          trainings,
+          weights,
+        );
+        await prisma.lot.update({
+          where: { id: lot.id },
+          data: {
+            scoreCatalogue: lotOutcome.scoreCatalogue,
+            scoreVoisines: lotOutcome.scoreVoisines,
+            scoreGlobal: lotOutcome.scoreGlobal,
+            nature: lotOutcome.nature,
+            natureLabel: lotOutcome.natureLabel,
+            matchTitles: lotOutcome.matchTitles,
+            matchedAt: new Date(),
+          },
+        });
+        lotsUpdated += 1;
+      }
     } catch (error) {
       failed += 1;
       console.error(`  ${tender.reference} : ${(error as Error).message}`);
     }
   }
 
-  console.log(`${updated} affaire(s) recalculée(s)${failed > 0 ? `, ${failed} en échec` : ""}.`);
+  console.log(
+    `${updated} affaire(s) et ${lotsUpdated} lot(s) recalculés${failed > 0 ? `, ${failed} en échec` : ""}.`,
+  );
 
   const counts = await prisma.matchResult.groupBy({ by: ["nature"], _count: { _all: true } });
   console.log("\nRépartition par appréciation :");

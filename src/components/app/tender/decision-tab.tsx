@@ -1,9 +1,13 @@
 "use client";
 
+import { useState } from "react";
+
 import { ActionForm } from "@/components/app/action-form";
-import { Badge, Card, CardHeader, Field, Notice, Select, Textarea } from "@/components/ui";
+import { Badge, Card, CardHeader, Field, Notice, ScorePill, Select, Textarea } from "@/components/ui";
 import { recordDecisionAction } from "@/app/(app)/affaires/[id]/actions";
-import { daysUntil, formatAmount, formatDateTime, goNoGoLabels, noGoReasonLabels } from "@/lib/labels";
+import {
+  daysUntil, formatAmount, formatDateTime, goNoGoLabels, natureLabels, noGoReasonLabels,
+} from "@/lib/labels";
 import type { TenderDetail } from "@/lib/tender-detail";
 import type { Permission } from "@/lib/rbac";
 
@@ -19,6 +23,11 @@ export function DecisionTab({ tender, permissions }: { tender: TenderDetail; per
   const canDecide = permissions.includes("decision.record");
   const current = tender.decisions.find((decision) => !decision.superseded);
   const criteria = buildCriteria(tender);
+  // Le formulaire change de forme selon la décision : les lots ne concernent
+  // qu'un GO, le motif qu'un NO GO. Tout afficher en permanence ferait saisir
+  // des champs sans objet.
+  const [status, setStatus] = useState(tender.goNoGo);
+  const [reason, setReason] = useState("");
 
   return (
     <div className="grid gap-5 xl:grid-cols-3">
@@ -67,6 +76,12 @@ export function DecisionTab({ tender, permissions }: { tender: TenderDetail; per
                       {decision.decidedBy ? ` · ${decision.decidedBy.name}` : ""}
                     </span>
                   </div>
+                  {decision.lotLabels.length > 0 ? (
+                    <p className="mt-1.5 text-[12px] text-ink-600">
+                      Positionnement sur {decision.lotLabels.length} lot(s) :{" "}
+                      {decision.lotLabels.join(" ; ")}
+                    </p>
+                  ) : null}
                   {decision.rationale ? (
                     <p className="mt-1.5 text-[13px] text-ink-700">{decision.rationale}</p>
                   ) : null}
@@ -109,22 +124,98 @@ export function DecisionTab({ tender, permissions }: { tender: TenderDetail; per
               >
                 <div className="space-y-3">
                   <Field label="Décision" required>
-                    <Select name="status" defaultValue={tender.goNoGo} required>
+                    <Select
+                      name="status"
+                      value={status}
+                      onChange={(event) => setStatus(event.target.value as typeof status)}
+                      required
+                    >
                       <option value="A_DECIDER">À décider</option>
                       <option value="GO">GO — répondre</option>
                       <option value="NO_GO">NO GO — ne pas poursuivre</option>
                     </Select>
                   </Field>
-                  <Field label="Motif (si NO GO)" hint="Obligatoire pour un NO GO.">
-                    <Select name="reason" defaultValue="">
-                      <option value="">—</option>
-                      {Object.entries(noGoReasonLabels).map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <Field label="Motivation" required hint="Conservée au journal d'audit.">
-                    <Textarea name="rationale" rows={4} required placeholder="Ce qui justifie la décision." />
+
+                  {status === "GO" && tender.lots.length > 0 ? (
+                    <Field
+                      label="Lots sur lesquels nous nous positionnons"
+                      required
+                      hint="Un accord-cadre ne se gagne pas en bloc : le lot retenu pilote le mémoire et le chiffrage."
+                    >
+                      <ul className="space-y-1.5 rounded-lg border border-ink-200 bg-white p-2.5">
+                        {tender.lots.map((lot) => (
+                          <li key={lot.id} className="flex items-start gap-2">
+                            <input
+                              type="checkbox"
+                              name="lots"
+                              value={lot.id}
+                              id={`lot-${lot.id}`}
+                              className="mt-0.5 size-4 shrink-0 accent-[var(--color-esme-600)]"
+                            />
+                            <label htmlFor={`lot-${lot.id}`} className="min-w-0 flex-1 cursor-pointer">
+                              <span className="block text-[13px] text-esme-900">
+                                Lot {lot.number} — {lot.title}
+                              </span>
+                              {lot.scoreGlobal !== null && lot.scoreGlobal !== undefined ? (
+                                <span className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                                  <ScorePill value={lot.scoreGlobal} size="sm" />
+                                  {lot.nature ? (
+                                    <span className="text-[11px] text-ink-500">{natureLabels[lot.nature]}</span>
+                                  ) : null}
+                                </span>
+                              ) : (
+                                <span className="mt-0.5 block text-[11px] text-ink-400">
+                                  Affinité non calculée pour ce lot.
+                                </span>
+                              )}
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    </Field>
+                  ) : null}
+
+                  {status === "GO" && tender.lots.length === 0 ? (
+                    <Notice tone="info">
+                      Cette consultation n&apos;est pas allotie : le GO porte sur l&apos;ensemble du marché.
+                    </Notice>
+                  ) : null}
+
+                  {status === "NO_GO" ? (
+                    <Field label="Motif du NO GO" required hint="Obligatoire, même lorsque l'affaire correspond au catalogue.">
+                      <Select
+                        name="reason"
+                        value={reason}
+                        onChange={(event) => setReason(event.target.value)}
+                        required
+                      >
+                        <option value="">— Choisir un motif —</option>
+                        {Object.entries(noGoReasonLabels).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                  ) : null}
+
+                  <Field
+                    label="Motivation"
+                    required
+                    hint={
+                      status === "NO_GO" && reason === "AUTRE"
+                        ? "Motif « Autre » : décrivez-le ici, c'est la seule trace qui restera."
+                        : "Conservée au journal d'audit."
+                    }
+                  >
+                    <Textarea
+                      name="rationale"
+                      rows={4}
+                      required
+                      placeholder={
+                        status === "NO_GO"
+                          ? "Ce qui écarte cette consultation."
+                          : "Ce qui justifie la décision."
+                      }
+                    />
                   </Field>
                 </div>
               </ActionForm>

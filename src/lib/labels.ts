@@ -1,6 +1,6 @@
 import type {
   AmountKind, ConnectorStatus, DceStatus, DocumentKind, GoNoGoStatus, KnowledgeCategory,
-  NegotiationKind, NoGoReason, NotificationKind, OutcomeStatus, PipelineStage,
+  NegotiationKind, NoGoReason, NoMatchReason, NotificationKind, OutcomeStatus, PipelineStage,
   RequirementLevel, RequirementStatus, ResponseDocStatus, ResponseDocType, TaskStatus,
   TenderNature, TrainingOrigin,
 } from "@prisma/client";
@@ -57,6 +57,86 @@ export const transitionGuards: Partial<Record<PipelineStage, string>> = {
     "Le dépôt doit être confirmé depuis la fiche (plateforme, date et responsable), avec accusé de réception si disponible.",
 };
 
+/**
+ * Colonnes du Kanban.
+ *
+ * Deux étapes du pipeline se lisent mal en une seule colonne, et ce sont
+ * justement celles où le travail se décide :
+ *
+ *  - « Matching » mélange ce que le catalogue couvre vraiment et le reste ;
+ *  - « Go / No Go » mélange ce qui attend un arbitrage et ce qui a été tranché.
+ *
+ * Elles sont donc éclatées à l'affichage, sans être dupliquées en base. Une
+ * colonne n'est pas une étape : c'est une étape plus un critère déjà présent
+ * sur l'affaire — l'appréciation du moteur dans un cas, la décision humaine
+ * dans l'autre. Ajouter des étapes aurait créé deux sources de vérité pour la
+ * même information, et donc tôt ou tard deux vérités différentes.
+ */
+export type BoardColumnKey = PipelineStage | "SANS_MATCHING" | "GO" | "NO_GO";
+
+/** Étape du pipeline réellement visée par un dépôt dans cette colonne. */
+export const boardColumnStage: Record<BoardColumnKey, PipelineStage> = {
+  AO_IDENTIFIES: "AO_IDENTIFIES",
+  MATCHING: "MATCHING",
+  SANS_MATCHING: "MATCHING",
+  GO_NO_GO: "GO_NO_GO",
+  GO: "GO_NO_GO",
+  NO_GO: "GO_NO_GO",
+  PREPARATION: "PREPARATION",
+  CONTROLE_QUALITE: "CONTROLE_QUALITE",
+  PRET_AU_DEPOT: "PRET_AU_DEPOT",
+  DEPOT_EFFECTUE: "DEPOT_EFFECTUE",
+  NEGOCIATION: "NEGOCIATION",
+  ATTENTE_RESULTAT: "ATTENTE_RESULTAT",
+  MARCHE_ATTRIBUE: "MARCHE_ATTRIBUE",
+  REJETE_NON_POURSUIVI: "REJETE_NON_POURSUIVI",
+};
+
+export const boardColumnOrder: BoardColumnKey[] = [
+  "AO_IDENTIFIES", "MATCHING", "SANS_MATCHING", "GO_NO_GO", "GO", "NO_GO",
+  "PREPARATION", "CONTROLE_QUALITE", "PRET_AU_DEPOT", "DEPOT_EFFECTUE",
+  "NEGOCIATION", "ATTENTE_RESULTAT", "MARCHE_ATTRIBUE", "REJETE_NON_POURSUIVI",
+];
+
+export const boardColumnLabels: Record<BoardColumnKey, string> = {
+  ...stageLabels,
+  MATCHING: "Matching",
+  SANS_MATCHING: "Sans matching",
+  GO_NO_GO: "Go / No Go — à décider",
+  GO: "Go",
+  NO_GO: "No Go",
+};
+
+export const boardColumnHints: Partial<Record<BoardColumnKey, string>> = {
+  MATCHING: "Cœur de catalogue : des programmes existants répondent au besoin.",
+  SANS_MATCHING: "Évaluées, hors cœur de catalogue. Un motif peut être consigné sur la fiche.",
+  GO_NO_GO: "Arbitrage attendu.",
+  GO: "Décision prise : nous répondons. Les lots visés figurent sur la décision.",
+  NO_GO: "Décision prise : nous ne répondons pas. Le motif est consigné.",
+};
+
+/**
+ * Colonne d'une affaire.
+ *
+ * Le critère de scission n'est jamais inventé : il vient de l'appréciation
+ * enregistrée par le moteur, ou de la décision enregistrée par un humain.
+ */
+export function boardColumnOf(card: {
+  stage: PipelineStage;
+  goNoGo: GoNoGoStatus;
+  nature?: TenderNature | null;
+}): BoardColumnKey {
+  if (card.stage === "MATCHING") {
+    return card.nature === "FORMATION_CATALOGUE" ? "MATCHING" : "SANS_MATCHING";
+  }
+  if (card.stage === "GO_NO_GO") {
+    if (card.goNoGo === "GO") return "GO";
+    if (card.goNoGo === "NO_GO") return "NO_GO";
+    return "GO_NO_GO";
+  }
+  return card.stage;
+}
+
 export const goNoGoLabels: Record<GoNoGoStatus, string> = {
   A_DECIDER: "À décider",
   GO: "GO",
@@ -80,7 +160,33 @@ export const noGoReasonLabels: Record<NoGoReason, string> = {
   EXIGENCE_ELIMINATOIRE: "Exigence éliminatoire",
   RISQUE_CONTRACTUEL: "Risque contractuel",
   DECISION_STRATEGIQUE: "Décision stratégique",
-  AUTRE: "Autre",
+  CONCURRENCE_DEFAVORABLE: "Concurrence défavorable (sortant installé)",
+  REFERENCES_INSUFFISANTES: "Références exigées non détenues",
+  CERTIFICATION_MANQUANTE: "Certification exigée non détenue",
+  ZONE_GEOGRAPHIQUE: "Zone géographique non couverte",
+  VOLUME_INSUFFISANT: "Volume trop faible",
+  PLAN_DE_CHARGE: "Plan de charge saturé sur la période",
+  AUTRE: "Autre — à préciser",
+};
+
+/**
+ * Motifs d'absence de correspondance.
+ *
+ * Répondent à une question différente de celle du No Go : ici c'est l'objet du
+ * marché qui ne correspond pas, là c'est l'opportunité d'y répondre qui est
+ * écartée. Une consultation peut parfaitement relever du catalogue et faire
+ * l'objet d'un No Go, ou l'inverse.
+ */
+export const noMatchReasonLabels: Record<NoMatchReason, string> = {
+  HORS_FORMATION: "Ne porte pas sur de la formation",
+  METIER_MANUEL: "Métier manuel hors du champ de l'établissement",
+  DOMAINE_NON_COUVERT: "Domaine non couvert par le référentiel",
+  FORMATION_INITIALE: "Formation initiale ou diplômante, pas de la formation continue",
+  PUBLIC_INADAPTE: "Public visé hors cible",
+  VOLUME_INSUFFISANT: "Volume trop faible pour être traité",
+  OBJET_TROP_IMPRECIS: "Objet trop imprécis pour être qualifié",
+  SCORE_TROP_FAIBLE: "Affinité trop faible malgré un objet de formation",
+  AUTRE: "Autre — à préciser",
 };
 
 export const dceStatusLabels: Record<DceStatus, string> = {

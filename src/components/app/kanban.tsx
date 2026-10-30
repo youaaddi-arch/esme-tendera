@@ -9,8 +9,9 @@ import type { PipelineStage } from "@prisma/client";
 import { Badge, Notice, ScorePill, cx } from "@/components/ui";
 import { moveTenderAction } from "@/app/(app)/pipeline/actions";
 import {
-  allowedTransitions, dceStatusLabels, formatAmount, formatDeadline, goNoGoLabels,
-  natureLabels, natureTone, stageLabels, stageOrder, transitionGuards,
+  allowedTransitions, boardColumnHints, boardColumnLabels, boardColumnOf, boardColumnOrder,
+  boardColumnStage, dceStatusLabels, formatAmount, formatDeadline, goNoGoLabels,
+  natureLabels, natureTone, transitionGuards, type BoardColumnKey,
 } from "@/lib/labels";
 
 export type KanbanCard = {
@@ -47,38 +48,71 @@ export function KanbanBoard({
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [dragged, setDragged] = useState<KanbanCard | null>(null);
-  const [hoverStage, setHoverStage] = useState<PipelineStage | null>(null);
+  const [hoverColumn, setHoverColumn] = useState<BoardColumnKey | null>(null);
   const [message, setMessage] = useState<{ tone: "danger" | "ok"; text: string } | null>(null);
   // Déplacement optimiste : la carte bouge tout de suite, et revient si le
   // serveur refuse la transition.
   const [optimistic, setOptimistic] = useState<Record<string, PipelineStage>>({});
 
-  const effectiveStage = (card: KanbanCard) => optimistic[card.id] ?? card.stage;
+  const effectiveStage = (card: KanbanCard): PipelineStage => optimistic[card.id] ?? card.stage;
 
-  const columns = stageOrder.map((stage) => ({
-    stage,
-    cards: cards.filter((card) => effectiveStage(card) === stage),
+  const effectiveColumn = (card: KanbanCard): BoardColumnKey =>
+    boardColumnOf({
+      stage: effectiveStage(card),
+      goNoGo: card.goNoGo as never,
+      nature: card.nature as never,
+    });
+
+  const columns = boardColumnOrder.map((column) => ({
+    column,
+    cards: cards.filter((card) => effectiveColumn(card) === column),
   }));
 
-  const canDrop = (stage: PipelineStage) => {
-    if (!dragged || !canMove) return false;
-    const from = effectiveStage(dragged);
-    return from === stage || (allowedTransitions[from] ?? []).includes(stage);
+  /**
+   * Colonnes qui ne se posent pas, parce que leur contenu n'est pas une étape.
+   *
+   * « Matching » et « Sans matching » reflètent l'appréciation du moteur : on
+   * n'y fait pas glisser une affaire, on corrige l'appréciation depuis la
+   * fiche. « Go » et « No Go » reflètent une décision qui exige des éléments
+   * qu'un glisser-déposer ne peut pas saisir — les lots visés dans un cas, le
+   * motif dans l'autre. Les y déposer silencieusement reviendrait à fabriquer
+   * une décision sans justification.
+   */
+  const DERIVED_COLUMNS: Partial<Record<BoardColumnKey, string>> = {
+    MATCHING: "L'appréciation du matching est calculée. Pour la corriger, ouvrez la fiche, onglet Matching.",
+    SANS_MATCHING: "L'appréciation du matching est calculée. Pour consigner un motif, ouvrez la fiche, onglet Matching.",
+    GO: "Un GO se prend depuis la fiche : il faut indiquer les lots sur lesquels vous vous positionnez.",
+    NO_GO: "Un NO GO se prend depuis la fiche : le motif est obligatoire.",
   };
 
-  function handleDrop(stage: PipelineStage) {
+  const canDrop = (column: BoardColumnKey) => {
+    if (!dragged || !canMove) return false;
+    if (DERIVED_COLUMNS[column]) return false;
+    const from = effectiveStage(dragged);
+    const to = boardColumnStage[column];
+    return from === to || (allowedTransitions[from] ?? []).includes(to);
+  };
+
+  function handleDrop(column: BoardColumnKey) {
     const card = dragged;
     setDragged(null);
-    setHoverStage(null);
+    setHoverColumn(null);
     if (!card) return;
-    const from = effectiveStage(card);
-    if (from === stage) return;
 
-    setOptimistic((current) => ({ ...current, [card.id]: stage }));
+    const refusal = DERIVED_COLUMNS[column];
+    if (refusal) {
+      setMessage({ tone: "danger", text: refusal });
+      return;
+    }
+
+    const target = boardColumnStage[column];
+    if (effectiveStage(card) === target) return;
+
+    setOptimistic((current) => ({ ...current, [card.id]: target }));
     setMessage(null);
 
     startTransition(async () => {
-      const result = await moveTenderAction(card.id, stage);
+      const result = await moveTenderAction(card.id, target);
       if (!result.ok) {
         setOptimistic((current) => {
           const next = { ...current };
@@ -90,7 +124,7 @@ export function KanbanBoard({
       }
       setMessage({
         tone: "ok",
-        text: `${card.reference} déplacée vers « ${stageLabels[stage]} ».`,
+        text: `${card.reference} déplacée vers « ${boardColumnLabels[column]} ».`,
       });
       router.refresh();
     });
@@ -118,14 +152,15 @@ export function KanbanBoard({
       {/* Défilement horizontal : onze colonnes ne tiennent pas sur un écran. */}
       <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-6">
         <div className="flex h-full min-h-[70vh] gap-3">
-          {columns.map(({ stage, cards: columnCards }) => {
-            const droppable = canDrop(stage);
-            const isTarget = hoverStage === stage && droppable;
+          {columns.map(({ column, cards: columnCards }) => {
+            const droppable = canDrop(column);
+            const isTarget = hoverColumn === column && droppable;
+            const stage = boardColumnStage[column];
             return (
               <section
-                key={stage}
-                id={stage}
-                aria-label={stageLabels[stage]}
+                key={column}
+                id={column}
+                aria-label={boardColumnLabels[column]}
                 className={cx(
                   "flex w-[272px] shrink-0 flex-col rounded-xl border bg-ink-50/70 transition-colors",
                   isTarget ? "kanban-drop-active border-framboise-300" : "border-ink-200",
@@ -134,24 +169,33 @@ export function KanbanBoard({
                 onDragOver={(event) => {
                   if (!droppable) return;
                   event.preventDefault();
-                  setHoverStage(stage);
+                  setHoverColumn(column);
                 }}
-                onDragLeave={() => setHoverStage((current) => (current === stage ? null : current))}
+                onDragLeave={() => setHoverColumn((current) => (current === column ? null : current))}
                 onDrop={(event) => {
                   event.preventDefault();
-                  handleDrop(stage);
+                  handleDrop(column);
                 }}
               >
-                <header className="flex items-center justify-between gap-2 border-b border-ink-200 px-3 py-2.5">
-                  <h2 className="truncate text-[12px] font-semibold uppercase tracking-wide text-ink-600">
-                    {stageLabels[stage]}
-                  </h2>
-                  <span className="shrink-0 rounded-full bg-white px-1.5 text-[11px] font-semibold tabular-nums text-ink-600 ring-1 ring-ink-200">
-                    {columnCards.length}
-                  </span>
+                <header className="border-b border-ink-200 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="truncate text-[12px] font-semibold uppercase tracking-wide text-ink-600">
+                      {boardColumnLabels[column]}
+                    </h2>
+                    <span className="shrink-0 rounded-full bg-white px-1.5 text-[11px] font-semibold tabular-nums text-ink-600 ring-1 ring-ink-200">
+                      {columnCards.length}
+                    </span>
+                  </div>
+                  {boardColumnHints[column] ? (
+                    <p className="mt-1 text-[11px] leading-snug text-ink-500">{boardColumnHints[column]}</p>
+                  ) : null}
                 </header>
 
-                {transitionGuards[stage] && dragged && droppable && effectiveStage(dragged) !== stage ? (
+                {DERIVED_COLUMNS[column] && dragged ? (
+                  <p className="border-b border-ink-200 bg-ink-100 px-3 py-1.5 text-[11px] leading-snug text-ink-600">
+                    {DERIVED_COLUMNS[column]}
+                  </p>
+                ) : transitionGuards[stage] && dragged && droppable && effectiveStage(dragged) !== stage ? (
                   <p className="border-b border-ink-200 bg-warn-50 px-3 py-1.5 text-[11px] leading-snug text-warn-700">
                     {transitionGuards[stage]}
                   </p>
@@ -170,7 +214,7 @@ export function KanbanBoard({
                         onDragStart={() => setDragged(card)}
                         onDragEnd={() => {
                           setDragged(null);
-                          setHoverStage(null);
+                          setHoverColumn(null);
                         }}
                       />
                     ))

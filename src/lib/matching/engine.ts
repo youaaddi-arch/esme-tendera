@@ -1,7 +1,7 @@
 import type { Training, TrainingOrigin } from "@prisma/client";
 
 import { conceptLabel, detectConcepts, expandWithConcepts } from "./synonyms";
-import { buildIdf, cosine, coverage, termVector, tokenizeWithBigrams } from "./text";
+import { buildIdf, cosineWithSupport, coverage, termVector, tokenizeWithBigrams } from "./text";
 import type { ScoringWeights } from "../settings";
 
 /**
@@ -37,6 +37,16 @@ export type MatchingInput = {
   } | null;
   /** Extraits de texte des pièces du DCE, pour affiner. */
   documentExcerpts?: string[];
+  /**
+   * Qualification héritée de la consultation mère, lorsqu'on évalue un lot.
+   *
+   * « Porte-t-on sur de la formation ? » est une propriété du marché, pas de
+   * chacun de ses lots : les lots d'un accord-cadre de formation s'intitulent
+   * « Rédiger pour le web à l'aide de l'IA » ou « Optimiser son référencement »
+   * — des titres de cours, où le mot « formation » n'apparaît jamais. Les
+   * évaluer isolément les classait tous hors champ.
+   */
+  inheritedFormation?: boolean;
 };
 
 export type TrainingScore = {
@@ -98,6 +108,24 @@ export type MatchingOutcome = {
   engine: "deterministe";
 };
 
+/**
+ * Répète un champ pour lui donner du poids.
+ *
+ * Le vecteur de termes ne connaît pas la notion de champ : tout le texte
+ * compte pareil. Or une fiche décrit son sujet dans son titre, et le reste —
+ * mots-clés, compétences connexes, programme détaillé — sert la couverture,
+ * pas l'identification. Les laisser peser autant revient à noyer le sujet dans
+ * son contexte : c'est ce qui faisait qu'une fiche d'électrotechnique, dont
+ * les mots-clés mentionnent l'IA, concurrençait une fiche d'IA sur un marché
+ * d'IA. Répéter le champ est la façon la plus simple de le pondérer sans
+ * changer la structure du vecteur.
+ */
+function weighted(text: string | null | undefined, times: number): string {
+  const value = (text ?? "").trim();
+  if (!value) return "";
+  return Array(times).fill(value).join(" ");
+}
+
 /** Profil textuel d'une fiche : ce à quoi la demande est comparée. */
 function trainingProfile(training: Training): string {
   const programme = Array.isArray(training.programme)
@@ -106,13 +134,15 @@ function trainingProfile(training: Training): string {
         .join(" ")
     : "";
   return [
-    training.title,
-    training.theme ?? "",
-    training.subTheme ?? "",
-    training.objective ?? "",
+    // Ce qui identifie la fiche.
+    weighted(training.title, 3),
+    weighted(training.theme, 2),
+    weighted(training.subTheme, 2),
+    weighted(training.objective, 2),
+    weighted(training.skills.join(" "), 2),
+    // Ce qui la contextualise.
     training.audience ?? "",
     training.objectives.join(" "),
-    training.skills.join(" "),
     training.relatedSkills.join(" "),
     training.keywords.join(" "),
     training.highlights.join(" "),
@@ -122,10 +152,11 @@ function trainingProfile(training: Training): string {
 
 function queryText(input: MatchingInput): string {
   return [
-    input.title,
-    input.objectSummary ?? "",
+    // L'objet du marché tient dans son intitulé ; le reste le précise.
+    weighted(input.title, 3),
+    weighted(input.objectSummary, 2),
+    weighted(input.analysis?.objet, 2),
     (input.lots ?? []).map((lot) => `${lot.title} ${lot.description ?? ""}`).join(" "),
-    input.analysis?.objet ?? "",
     input.analysis?.besoin ?? "",
     (input.analysis?.publics ?? []).join(" "),
     (input.analysis?.modalites ?? []).join(" "),
@@ -143,10 +174,57 @@ function queryText(input: MatchingInput): string {
  * une transformation saturante les étale sur une échelle lisible sans jamais
  * atteindre 100, qui signifierait une certitude que le moteur ne peut pas
  * avoir.
+ *
+ * La pente reste à 3,2. Elle a été abaissée un temps pour contenir des scores
+ * manifestement trop hauts, avant de constater que le problème n'était pas
+ * l'échelle mais les similarités elles-mêmes : du vocabulaire administratif
+ * surpondéré, et des étiquettes de concept absentes de l'IDF. Ces deux causes
+ * traitées, aplatir l'échelle ne faisait plus qu'écraser aussi les vraies
+ * correspondances — un marché de formation à l'IA retombait à 33/100 alors que
+ * ses quatre meilleures fiches étaient les bonnes.
  */
 function calibrate(raw: number): number {
   const scaled = 100 * (1 - Math.exp(-3.2 * raw));
   return Math.max(0, Math.min(97, scaled));
+}
+
+/**
+ * Concepts trop répandus pour discriminer quoi que ce soit.
+ *
+ * Le recouvrement conceptuel rattrape les formulations d'acheteur éloignées du
+ * vocabulaire du catalogue : c'est sa raison d'être. Mais un concept présent
+ * sur presque toutes les fiches n'apporte aucune information — « formation »
+ * est partagé par l'intégralité du référentiel et par la quasi-totalité des
+ * avis retenus par la veille. Le compter comme un point commun revient à
+ * donner une prime à tout le monde, et c'est exactement ce qui faisait
+ * remonter des correspondances trop éloignées.
+ *
+ * On pondère donc chaque concept par sa rareté dans le référentiel, et on
+ * ignore ceux qui dépassent ce seuil de fréquence.
+ */
+const CONCEPT_UBIQUITY_THRESHOLD = 0.6;
+
+/**
+ * Poids de chaque concept, d'après sa fréquence dans le référentiel.
+ *
+ * Un concept porté par deux fiches sur soixante-sept vaut beaucoup ; un
+ * concept porté par soixante vaut presque rien.
+ */
+function conceptWeights(profileTokenLists: string[][]): Map<string, number> {
+  const total = profileTokenLists.length;
+  const frequency = new Map<string, number>();
+  for (const tokens of profileTokenLists) {
+    for (const concept of new Set(tokens.filter((token) => token.startsWith("@")))) {
+      frequency.set(concept, (frequency.get(concept) ?? 0) + 1);
+    }
+  }
+
+  const weights = new Map<string, number>();
+  for (const [concept, count] of frequency) {
+    const share = count / total;
+    weights.set(concept, share > CONCEPT_UBIQUITY_THRESHOLD ? 0 : Math.log(total / count) / Math.log(total));
+  }
+  return weights;
 }
 
 /** Note agrégée d'une famille : la meilleure fiche pèse, la profondeur aussi. */
@@ -196,7 +274,26 @@ export function runMatching(
   }
 
   const profiles = active.map((training) => tokenizeWithBigrams(trainingProfile(training)));
-  const idf = buildIdf(profiles);
+  const expandedProfiles = profiles.map((tokens) => expandWithConcepts(tokens));
+
+  // L'IDF se calcule sur les profils ÉTENDUS, c'est-à-dire sur le même espace
+  // que les vecteurs comparés.
+  //
+  // Calculé sur les profils bruts, il ignorait les étiquettes de concept
+  // injectées par l'expansion : absentes de la table, elles retombaient sur le
+  // poids par défaut. Comme deux fiches de formation quelconques partagent une
+  // quinzaine de concepts, cela installait un plancher de similarité entre
+  // n'importe quels textes — un marché sur les risques amiante ressortait à
+  // 58/100 face à une fiche de stratégie IA. Les concepts doivent être pesés
+  // comme les autres termes : par leur rareté réelle.
+  const idf = buildIdf(expandedProfiles);
+  const conceptWeight = conceptWeights(expandedProfiles);
+
+  /**
+   * Poids d'un concept. Un concept absent du référentiel vaut le maximum : il
+   * est parfaitement discriminant, et surtout parfaitement non couvert.
+   */
+  const weightOf = (concept: string) => conceptWeight.get(concept) ?? 1;
 
   const queryTokens = expandWithConcepts(tokenizeWithBigrams(query));
   const queryVector = termVector(queryTokens);
@@ -204,23 +301,56 @@ export function runMatching(
   const queryTokenSet = new Set(queryTokens);
 
   const scored: TrainingScore[] = active.map((training, index) => {
-    const profileTokens = expandWithConcepts(profiles[index]);
+    const profileTokens = expandedProfiles[index];
     const profileVector = termVector(profileTokens);
     const profileConcepts = new Set(profileTokens.filter((token) => token.startsWith("@")));
 
-    const lexical = cosine(queryVector, profileVector, idf);
+    const { score: lexical, support } = cosineWithSupport(queryVector, profileVector, idf);
 
     // Recouvrement conceptuel : c'est lui qui rattrape les formulations
-    // d'acheteur éloignées du vocabulaire du catalogue.
+    // d'acheteur éloignées du vocabulaire du catalogue. Pondéré par la rareté,
+    // pour qu'un concept partagé par tout le référentiel ne vaille rien.
     const shared = [...profileConcepts].filter((concept) => queryConcepts.has(concept));
-    const union = new Set([...profileConcepts, ...queryConcepts]).size;
-    const conceptual = union === 0 ? 0 : shared.length / union;
+    const sharedWeight = shared.reduce((sum, concept) => sum + weightOf(concept), 0);
+    const unionWeight = [...new Set([...profileConcepts, ...queryConcepts])].reduce(
+      (sum, concept) => sum + weightOf(concept),
+      0,
+    );
+    const conceptual = unionWeight === 0 ? 0 : sharedWeight / unionWeight;
 
     // Couverture des compétences explicitement listées sur la fiche.
     const skillTokens = training.skills.flatMap((skill) => tokenizeWithBigrams(skill));
     const skillCoverage = coverage(skillTokens, queryTokenSet);
 
     let raw = lexical * 0.5 + conceptual * 0.32 + skillCoverage * 0.18;
+
+    // Ancrage lexical.
+    //
+    // Une correspondance portée par les seuls concepts, sans qu'un seul terme
+    // du besoin ne se retrouve dans la fiche, est presque toujours un faux
+    // positif : « formation des agents à la relation usager » et « management
+    // d'équipe projet » partagent des concepts sans parler de la même chose.
+    // On n'annule pas ces correspondances — le vocabulaire d'un acheteur peut
+    // légitimement ne recouper aucun mot du catalogue — mais on les retient.
+    const anchor = lexical >= 0.06 ? 1 : 0.55 + (lexical / 0.06) * 0.45;
+    raw *= anchor;
+
+    // Appui lexical : combien de termes portent réellement la similarité.
+    //
+    // Une proximité thématique s'appuie sur beaucoup de termes du domaine ;
+    // une coïncidence repose sur deux ou trois mots passe-partout qui pèsent
+    // lourd des deux côtés. Le support distingue les deux sans qu'il faille
+    // énumérer les mots suspects, et il tient donc aussi pour les mots que
+    // personne n'a pensé à lister.
+    // Seuil calibré sur des avis réels, pas choisi : une correspondance
+    // thématique vérifiée (marché de formation à l'IA face aux fiches IA du
+    // catalogue) s'appuie sur un support de 5 à 6 ; une coïncidence lexicale
+    // (« risques amiante » face à « stratégie IA ») reste entre 1 et 2,5. Le
+    // plein crédit est donc accordé à partir de 4, et le plancher reste haut :
+    // le support corrige à la marge, l'essentiel de l'écart vient déjà de la
+    // similarité elle-même.
+    const supportFactor = Math.min(1, support / 4);
+    raw *= 0.6 + 0.4 * supportFactor;
 
     // Ajustements d'exécution : ils corrigent à la marge, jamais au point de
     // transformer une fiche hors sujet en correspondance.
@@ -233,7 +363,15 @@ export function runMatching(
     }
     if (training.intraOnly && /inter-entreprise/i.test(query)) raw *= 0.95;
 
-    const signals = shared.map(conceptLabel).slice(0, 8);
+    // Seuls les concepts discriminants sont montrés : afficher « formation »
+    // comme point commun entre un marché de formation et une fiche de
+    // formation n'apprend rien à personne, et donne une fausse impression de
+    // justification.
+    const signals = shared
+      .filter((concept) => weightOf(concept) > 0)
+      .sort((a, b) => weightOf(b) - weightOf(a))
+      .map(conceptLabel)
+      .slice(0, 8);
     const covered = training.skills
       .filter((skill) => coverage(tokenizeWithBigrams(skill), queryTokenSet) >= 0.5)
       .slice(0, 6);
@@ -331,7 +469,19 @@ export function runMatching(
 
   // Nature de la consultation, évaluée indépendamment des domaines couverts :
   // un marché de formation hors catalogue reste un marché de formation.
-  const formation = assessFormation(input, queryConcepts);
+  const assessed = assessFormation(input, queryConcepts);
+  // Un lot hérite de la qualification de sa consultation : le mot
+  // « formation » ne figure pas dans un intitulé de cours.
+  const formation =
+    input.inheritedFormation === true && !assessed.isFormation
+      ? {
+          isFormation: true,
+          signals: [
+            "Qualification héritée de la consultation : l'intitulé du lot ne porte pas lui-même le vocabulaire de la formation.",
+            ...assessed.signals,
+          ],
+        }
+      : assessed;
   const natureVerdict = classifyNature(
     formation.isFormation,
     { catalogue: scoreCatalogue, voisines: scoreVoisines, ionis: scoreIonis },
@@ -382,6 +532,84 @@ export function runMatching(
     ),
     caveats,
     engine: "deterministe",
+  };
+}
+
+/** Un lot, tel qu'il est soumis au matching. */
+export type LotMatchingInput = {
+  number: string;
+  title: string;
+  description?: string | null;
+  cpvCodes?: string[];
+};
+
+/** Affinité d'un lot avec le référentiel. */
+export type LotMatchingOutcome = {
+  number: string;
+  scoreCatalogue: number;
+  scoreVoisines: number;
+  scoreGlobal: number;
+  nature: TenderNature;
+  natureLabel: string;
+  /** Fiches les plus proches, du plus au moins pertinent. */
+  matchTitles: string[];
+};
+
+/**
+ * Évalue un lot pour lui-même.
+ *
+ * Le score d'une affaire agrège tous ses lots : sur un accord-cadre de
+ * formation à douze lots dont deux relèvent du catalogue, la note globale ne
+ * décrit aucun des deux. Elle est trop basse pour signaler l'opportunité, trop
+ * haute pour écarter le reste. Or c'est lot par lot que l'on se positionne.
+ *
+ * Le lot hérite du contexte de la consultation — codes CPV et nature du marché
+ * déclarés par l'acheteur — pour que la qualification « formation » reste
+ * correcte : l'intitulé d'un lot est souvent trop court pour la porter seul
+ * (« Lot 3 : anglais professionnel »).
+ *
+ * Le moteur est réinstancié à chaque lot plutôt que partagé. C'est quelques
+ * dizaines de millisecondes par lot, et cela garantit qu'un lot est noté
+ * exactement comme le serait une affaire du même objet — une seule
+ * implémentation du score, donc aucune dérive possible entre les deux.
+ */
+export function runLotMatching(
+  lot: LotMatchingInput,
+  context: {
+    cpvCodes?: string[];
+    marketTypes?: string[];
+    buyer?: string | null;
+    /** Verdict « formation » rendu sur la consultation mère. */
+    isFormation?: boolean;
+  },
+  trainings: Training[],
+  weights: ScoringWeights,
+): LotMatchingOutcome {
+  const outcome = runMatching(
+    {
+      title: lot.title,
+      objectSummary: lot.description ?? null,
+      buyer: context.buyer ?? null,
+      // Les CPV du lot priment ; à défaut, ceux de la consultation.
+      cpvCodes: lot.cpvCodes?.length ? lot.cpvCodes : (context.cpvCodes ?? []),
+      marketTypes: context.marketTypes ?? [],
+      inheritedFormation: context.isFormation,
+    },
+    trainings,
+    weights,
+  );
+
+  return {
+    number: lot.number,
+    scoreCatalogue: outcome.scoreCatalogue,
+    scoreVoisines: outcome.scoreVoisines,
+    scoreGlobal: outcome.scoreGlobal,
+    nature: outcome.nature,
+    natureLabel: outcome.natureLabel,
+    matchTitles: outcome.matches
+      .filter((match) => match.score >= 30)
+      .slice(0, 4)
+      .map((match) => `${match.title} (${Math.round(match.score)}/100)`),
   };
 }
 
@@ -519,6 +747,25 @@ function detectMetierManuel(text: string): string | null {
  * hors catalogue. Seul l'apprentissage d'un métier manuel étranger au champ de
  * l'ESME sort du périmètre.
  */
+/**
+ * Seuils d'appréciation.
+ *
+ * Calibrés sur la distribution réelle des scores, pas choisis a priori. Sur un
+ * échantillon de cent avis BOAMP portant le terme « formation », les scores
+ * catalogue se répartissent ainsi : une masse de 41 avis entre 0 et 30 — des
+ * marchés de formation sans rapport avec l'offre, sécurité incendie, secourisme
+ * ou conduite — puis une queue de huit avis entre 30 et 40, et deux au-delà.
+ * Le seuil est placé à l'entrée de cette queue : il retient cinq avis sur
+ * soixante-et-onze, un format de liste courte exploitable. Au-delà de 40, il
+ * n'en restait que deux, ce qui écartait des opportunités défendables.
+ *
+ * Ils ne sont pas transposables tels quels à un autre référentiel : un
+ * catalogue plus large produirait des scores plus hauts. À revoir après toute
+ * évolution substantielle du référentiel, en rejouant la même mesure.
+ */
+const SEUIL_CATALOGUE = 35;
+const SEUIL_VOISINES = 28;
+
 export function classifyNature(
   isFormation: boolean,
   scores: { catalogue: number; voisines: number; ionis: number },
@@ -548,7 +795,7 @@ export function classifyNature(
     };
   }
 
-  if (scores.catalogue >= 45) {
+  if (scores.catalogue >= SEUIL_CATALOGUE) {
     return {
       nature: "FORMATION_CATALOGUE",
       label:
@@ -556,7 +803,7 @@ export function classifyNature(
     };
   }
 
-  if (scores.voisines >= 45 || scores.ionis >= 45) {
+  if (scores.voisines >= SEUIL_VOISINES || scores.ionis >= SEUIL_VOISINES) {
     return {
       nature: "FORMATION_VOISINE",
       label:

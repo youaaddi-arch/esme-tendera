@@ -33,6 +33,35 @@ const STOPWORDS = new Set([
 ]);
 
 /**
+ * Vocabulaire administratif sans contenu thématique.
+ *
+ * Ces mots ne sont pas des mots vides de la langue : ils ont un sens. Mais
+ * dans ce corpus — des avis de marché d'un côté, des fiches de formation de
+ * l'autre — ils apparaissent partout sans jamais dire de quoi il s'agit. Or
+ * l'IDF, calculé sur seulement quelques dizaines de fiches, leur attribue un
+ * poids élevé dès qu'ils ne figurent que dans une dizaine d'entre elles.
+ *
+ * Mesuré sur des avis réels : « Actions de formation — Risques amiante dans la
+ * construction » ressortait à 58/100 face à « Executive Bootcamp : concevez
+ * votre stratégie IA », et 62 % de cette similarité venait du seul mot
+ * « action ». Les retirer coûte peu — aucun besoin ne se décrit par eux — et
+ * supprime une classe entière de faux positifs.
+ *
+ * Les mots qui portent réellement un sujet n'y figurent pas, même lorsqu'ils
+ * sont fréquents : « risque », « projet » ou « management » désignent de
+ * vraies thématiques de formation.
+ */
+const BOILERPLATE = new Set([
+  "action", "actions", "cadre", "cadres", "mise", "oeuvre", "place", "prestation",
+  "prestations", "dispositif", "dispositifs", "demarche", "demarches", "ensemble",
+  "niveau", "niveaux", "divers", "diverses", "different", "differents", "differente",
+  "differentes", "type", "types", "objet", "present", "presente", "cas", "partir",
+  "compte", "sein", "titre", "lieu", "nature", "ordre", "suite", "fin", "debut",
+  "cours", "fois", "part", "point", "points", "element", "elements", "ligne",
+  "ensemble", "relatif", "relative", "relatifs", "concernant", "notamment",
+]);
+
+/**
  * Troncature morphologique légère.
  *
  * Un vrai stemmer français (Snowball) couperait trop court sur le vocabulaire
@@ -67,7 +96,13 @@ export function tokenize(input: string): string[] {
   return deaccent(input)
     .replace(/['’]/g, " ")
     .split(/[^a-z0-9+]+/)
-    .filter((word) => word.length > 1 && !STOPWORDS.has(word) && !/^\d{1,2}$/.test(word))
+    .filter(
+      (word) =>
+        word.length > 1 &&
+        !STOPWORDS.has(word) &&
+        !BOILERPLATE.has(word) &&
+        !/^\d{1,2}$/.test(word),
+    )
     .map(stem);
 }
 
@@ -100,22 +135,57 @@ export function termVector(tokens: string[]): TermVector {
  * « photovoltaïque » ou « HTA » qui portent l'information.
  */
 export function cosine(a: TermVector, b: TermVector, idf: Map<string, number>): number {
-  if (a.size === 0 || b.size === 0) return 0;
+  return cosineWithSupport(a, b, idf).score;
+}
+
+/**
+ * Similarité cosinus, accompagnée du nombre de termes qui la portent.
+ *
+ * Deux textes peuvent afficher la même similarité pour des raisons opposées :
+ * l'un parce qu'ils partagent trente termes du même domaine, l'autre parce
+ * qu'un seul mot générique pèse lourd des deux côtés. Le premier est une
+ * correspondance ; le second est une coïncidence, et c'est elle qui produit
+ * les rapprochements « trop éloignés ».
+ *
+ * `support` est le nombre effectif de termes contributifs, calculé comme
+ * l'inverse de l'indice de concentration des contributions au produit
+ * scalaire. Une similarité portée à 60 % par un seul mot donne un support
+ * proche de 2 ; une vraie proximité thématique dépasse largement 10. Le moteur
+ * s'en sert pour atténuer les correspondances trop concentrées, sans avoir à
+ * deviner quels mots sont « génériques ».
+ */
+export function cosineWithSupport(
+  a: TermVector,
+  b: TermVector,
+  idf: Map<string, number>,
+): { score: number; support: number } {
+  if (a.size === 0 || b.size === 0) return { score: 0, support: 0 };
   let dot = 0;
   let normA = 0;
   let normB = 0;
+  const contributions: number[] = [];
+
   for (const [term, count] of a) {
     const weight = count * (idf.get(term) ?? 1);
     normA += weight * weight;
     const other = b.get(term);
-    if (other !== undefined) dot += weight * other * (idf.get(term) ?? 1);
+    if (other !== undefined) {
+      const contribution = weight * other * (idf.get(term) ?? 1);
+      dot += contribution;
+      contributions.push(contribution);
+    }
   }
   for (const [term, count] of b) {
     const weight = count * (idf.get(term) ?? 1);
     normB += weight * weight;
   }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  if (normA === 0 || normB === 0 || dot === 0) return { score: 0, support: 0 };
+
+  const concentration = contributions.reduce((sum, value) => sum + (value / dot) ** 2, 0);
+  return {
+    score: dot / (Math.sqrt(normA) * Math.sqrt(normB)),
+    support: concentration === 0 ? 0 : 1 / concentration,
+  };
 }
 
 /** IDF lissé, calculé sur le corpus des fiches de formation. */
