@@ -501,14 +501,37 @@ chemin.
 
 ## Déploiement
 
-1. PostgreSQL 14+ provisionné, `DATABASE_URL` renseignée.
+Le build prépare la base lui-même, via `scripts/provision.mjs` : `prisma db push`
+puis le seed, avec les affaires de démonstration désactivées. Les deux opérations
+sont rejouables sans effet de bord, et sont donc relancées à chaque déploiement
+sans rien dupliquer ni réécrire un mot de passe modifié depuis l'initialisation.
+
+Sur un hébergement sans accès terminal, il suffit donc de renseigner les
+variables et de déclencher un déploiement :
+
+1. PostgreSQL 14+ provisionné, `DATABASE_URL` renseignée. Lorsque l'hébergeur
+   expose aussi une connexion directe (`DATABASE_URL_UNPOOLED` ou
+   `POSTGRES_URL_NON_POOLING`), elle est utilisée pour la création du schéma :
+   un pooler en mode transaction ne convient pas aux migrations.
 2. `AUTH_SECRET` généré (`openssl rand -base64 48`).
-3. `npx prisma migrate deploy` (ou `npm run db:push` en première installation).
-4. `npm run db:seed` — ajouter `TENDERA_SEED_DEMO=0` en production.
-5. `npm run build && npm run start`.
+3. `TENDERA_CRON_SECRET` défini et déclencheur quotidien configuré.
+4. `TENDERA_STORAGE_DIR` sur un volume persistant et sauvegardé, ou
+   `BLOB_READ_WRITE_TOKEN` si le système de fichiers n'est pas persistant.
+5. Déployer. Sans `DATABASE_URL`, le build réussit quand même et l'application
+   affiche son écran de configuration au lieu de planter.
 6. Changer les mots de passe des comptes de démarrage.
-7. `TENDERA_CRON_SECRET` défini et déclencheur quotidien configuré.
-8. `TENDERA_STORAGE_DIR` sur un volume persistant et sauvegardé.
+
+`db push` est lancé **sans** `--accept-data-loss` : une évolution du schéma qui
+supprimerait une colonne fait échouer le build au lieu de détruire des données.
+Ce cas demande une intervention humaine délibérée.
+
+Sur un serveur dédié, les mêmes étapes restent disponibles à la main :
+
+```bash
+npm run db:push
+TENDERA_SEED_DEMO=0 npm run db:seed
+npm run build && npm run start
+```
 
 ### Sauvegardes
 

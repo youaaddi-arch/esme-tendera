@@ -92,16 +92,13 @@ export function ConfigurationRequise({ detail }: { detail?: string }) {
           <div className="mt-6 rounded-xl border border-ink-200 bg-ink-50 px-4 py-3">
             <p className="text-[13px] font-medium text-esme-900">Une fois les variables en place</p>
             <p className="mt-1 text-[13px] leading-relaxed text-ink-600">
-              Créez le schéma et chargez le référentiel depuis un poste disposant de la chaîne de
-              connexion :
+              Relancez un déploiement : le schéma et le référentiel pédagogique sont créés
+              automatiquement pendant le build, à partir de la chaîne de connexion. Aucune commande
+              à lancer à la main.
             </p>
-            <pre className="mt-2 overflow-x-auto rounded-lg bg-white px-3 py-2 font-mono text-[12px] leading-relaxed text-ink-700">
-{`npm run db:push
-npm run db:seed`}
-            </pre>
             <p className="mt-2 text-[12px] text-ink-500">
-              Puis redéployez. Les comptes de démarrage et leur mot de passe initial figurent au
-              README.
+              Les comptes de démarrage et leur mot de passe initial figurent au README. Ce mot de
+              passe doit être changé dès la première connexion.
             </p>
           </div>
 
