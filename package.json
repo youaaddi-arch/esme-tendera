@@ -21,6 +21,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
     "@prisma/client": "^6.19.0",
+    "@vercel/blob": "^2.8.2",
     "adm-zip": "^0.5.16",
     "bcryptjs": "^3.0.2",
     "docx": "^9.5.1",
