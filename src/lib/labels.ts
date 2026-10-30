@@ -63,22 +63,23 @@ export const transitionGuards: Partial<Record<PipelineStage, string>> = {
  * Deux étapes du pipeline se lisent mal en une seule colonne, et ce sont
  * justement celles où le travail se décide :
  *
- *  - « Matching » mélange ce que le catalogue couvre vraiment et le reste ;
- *  - « Go / No Go » mélange ce qui attend un arbitrage et ce qui a été tranché.
+ * « Go / No Go » mélange ce qui attend un arbitrage et ce qui a été tranché.
+ * Elle est donc éclatée à l'affichage, sans être dupliquée en base : une
+ * colonne n'est pas une étape, c'est une étape plus un critère déjà présent
+ * sur l'affaire — ici la décision humaine. Ajouter des étapes aurait créé
+ * deux sources de vérité pour la même information.
  *
- * Elles sont donc éclatées à l'affichage, sans être dupliquées en base. Une
- * colonne n'est pas une étape : c'est une étape plus un critère déjà présent
- * sur l'affaire — l'appréciation du moteur dans un cas, la décision humaine
- * dans l'autre. Ajouter des étapes aurait créé deux sources de vérité pour la
- * même information, et donc tôt ou tard deux vérités différentes.
+ * « Matching », en revanche, n'est pas éclatée : l'étape elle-même ne reçoit
+ * que le cœur de catalogue, et les affaires évaluées hors catalogue restent
+ * dans « AO identifiés ». Le tri par appréciation se fait par le filtre, qui
+ * laisse choisir, plutôt que par une colonne de plus à parcourir.
  */
-export type BoardColumnKey = PipelineStage | "SANS_MATCHING" | "GO" | "NO_GO";
+export type BoardColumnKey = PipelineStage | "GO" | "NO_GO";
 
 /** Étape du pipeline réellement visée par un dépôt dans cette colonne. */
 export const boardColumnStage: Record<BoardColumnKey, PipelineStage> = {
   AO_IDENTIFIES: "AO_IDENTIFIES",
   MATCHING: "MATCHING",
-  SANS_MATCHING: "MATCHING",
   GO_NO_GO: "GO_NO_GO",
   GO: "GO_NO_GO",
   NO_GO: "GO_NO_GO",
@@ -93,7 +94,7 @@ export const boardColumnStage: Record<BoardColumnKey, PipelineStage> = {
 };
 
 export const boardColumnOrder: BoardColumnKey[] = [
-  "AO_IDENTIFIES", "MATCHING", "SANS_MATCHING", "GO_NO_GO", "GO", "NO_GO",
+  "AO_IDENTIFIES", "MATCHING", "GO_NO_GO", "GO", "NO_GO",
   "PREPARATION", "CONTROLE_QUALITE", "PRET_AU_DEPOT", "DEPOT_EFFECTUE",
   "NEGOCIATION", "ATTENTE_RESULTAT", "MARCHE_ATTRIBUE", "REJETE_NON_POURSUIVI",
 ];
@@ -101,15 +102,15 @@ export const boardColumnOrder: BoardColumnKey[] = [
 export const boardColumnLabels: Record<BoardColumnKey, string> = {
   ...stageLabels,
   MATCHING: "Matching",
-  SANS_MATCHING: "Sans matching",
   GO_NO_GO: "Go / No Go — à décider",
   GO: "Go",
   NO_GO: "No Go",
 };
 
 export const boardColumnHints: Partial<Record<BoardColumnKey, string>> = {
+  AO_IDENTIFIES:
+    "Repérées par la veille. Celles qui sortent du cœur de catalogue y restent : filtrez par appréciation pour les trier.",
   MATCHING: "Cœur de catalogue : des programmes existants répondent au besoin.",
-  SANS_MATCHING: "Évaluées, hors cœur de catalogue. Un motif peut être consigné sur la fiche.",
   GO_NO_GO: "Arbitrage attendu.",
   GO: "Décision prise : nous répondons. Les lots visés figurent sur la décision.",
   NO_GO: "Décision prise : nous ne répondons pas. Le motif est consigné.",
@@ -118,17 +119,14 @@ export const boardColumnHints: Partial<Record<BoardColumnKey, string>> = {
 /**
  * Colonne d'une affaire.
  *
- * Le critère de scission n'est jamais inventé : il vient de l'appréciation
- * enregistrée par le moteur, ou de la décision enregistrée par un humain.
+ * Le critère de scission n'est jamais inventé : il vient de la décision
+ * enregistrée par un humain. L'appréciation du moteur, elle, est portée par
+ * l'étape elle-même.
  */
 export function boardColumnOf(card: {
   stage: PipelineStage;
   goNoGo: GoNoGoStatus;
-  nature?: TenderNature | null;
 }): BoardColumnKey {
-  if (card.stage === "MATCHING") {
-    return card.nature === "FORMATION_CATALOGUE" ? "MATCHING" : "SANS_MATCHING";
-  }
   if (card.stage === "GO_NO_GO") {
     if (card.goNoGo === "GO") return "GO";
     if (card.goNoGo === "NO_GO") return "NO_GO";

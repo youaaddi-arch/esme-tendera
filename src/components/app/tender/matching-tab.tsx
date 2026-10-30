@@ -285,9 +285,9 @@ export function MatchingTab({ tender, permissions }: { tender: TenderDetail; per
         {/*
           Qualification humaine d'une absence de correspondance.
 
-          Sans elle, la colonne « Sans matching » du pipeline ne distingue pas
-          les dossiers examinés et écartés du simple retard : on ne sait pas si
-          personne n'a regardé, ou si quelqu'un a regardé et conclu.
+          Sans elle, rien ne distingue dans « AO identifiés » les dossiers
+          examinés et écartés du simple retard : on ne sait pas si personne n'a
+          regardé, ou si quelqu'un a regardé et conclu.
         */}
         {result.nature !== "FORMATION_CATALOGUE" ? (
           <Card>
