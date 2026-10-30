@@ -1,0 +1,51 @@
+{
+  "name": "esme-tendera",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ESME TENDERA — L'intelligence des appels d'offres",
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "test": "node --test --import tsx tests/**/*.test.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@prisma/client": "^6.19.0",
+    "@vercel/blob": "^2.8.2",
+    "adm-zip": "^0.5.16",
+    "bcryptjs": "^3.0.2",
+    "docx": "^9.5.1",
+    "jose": "^6.1.0",
+    "lucide-react": "^0.552.0",
+    "mammoth": "^1.11.0",
+    "next": "16.4.3",
+    "pdfjs-dist": "^4.10.38",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "xlsx": "^0.18.5",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.3",
+    "prisma": "^6.19.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.20.6",
+    "typescript": "^5"
+  }
+}

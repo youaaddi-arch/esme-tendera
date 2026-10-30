@@ -1,0 +1,58 @@
+# Synchronisation quotidienne de la veille.
+#
+# Alternative au cron de l'hébergeur, utile quand la plateforme d'hébergement
+# n'en propose pas. Le déclencheur appelle simplement la route protégée de
+# l'application déployée.
+#
+# Deux secrets de dépôt sont nécessaires :
+#   TENDERA_URL          — URL publique de l'application, sans barre finale
+#   TENDERA_CRON_SECRET  — même valeur que la variable du serveur
+name: Veille quotidienne
+
+on:
+  schedule:
+    # 06:00 UTC — 7 h à Paris en heure d'hiver, 8 h en heure d'été.
+    # GitHub Actions ne gère pas les fuseaux : l'heure est fixée en UTC.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  synchroniser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lancer la synchronisation
+        env:
+          TENDERA_URL: ${{ secrets.TENDERA_URL }}
+          TENDERA_CRON_SECRET: ${{ secrets.TENDERA_CRON_SECRET }}
+        run: |
+          if [ -z "$TENDERA_URL" ] || [ -z "$TENDERA_CRON_SECRET" ]; then
+            echo "Secrets TENDERA_URL et TENDERA_CRON_SECRET non configurés." >&2
+            exit 1
+          fi
+
+          # --fail-with-body : on veut le corps de la réponse même en erreur,
+          # pour que le journal du workflow dise ce qui a échoué.
+          curl --silent --show-error --fail-with-body \
+            --max-time 600 \
+            --retry 3 --retry-delay 30 --retry-all-errors \
+            -X POST \
+            -H "Authorization: Bearer $TENDERA_CRON_SECRET" \
+            "$TENDERA_URL/api/veille/quotidienne" \
+            | tee resultat.json
+
+          python3 - <<'PY'
+          import json
+          with open("resultat.json", encoding="utf-8") as handle:
+              data = json.load(handle)
+          total = 0
+          for connecteur in data.get("connecteurs", []):
+              print(
+                  f"{connecteur['source']} : {connecteur['statut']} — "
+                  f"{connecteur['avisRecuperes']} avis, "
+                  f"{connecteur['affairesCreees']} affaires créées"
+              )
+              for erreur in connecteur.get("erreurs", []):
+                  print(f"  erreur : {erreur}")
+              total += connecteur.get("affairesCreees", 0)
+          print(f"Total : {total} affaire(s) créée(s), {data.get('rappelsCrees', 0)} rappel(s).")
+          PY

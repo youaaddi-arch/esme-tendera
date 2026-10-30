@@ -1,0 +1,273 @@
+@import "tailwindcss";
+
+/* ===========================================================================
+   ESME TENDERA — design system
+   ---------------------------------------------------------------------------
+   Couleurs issues de la mini-charte ESME Executive Education (23 juillet 2026) :
+
+     Principales   BLEU ESME   CMJN 100/80/5/0   RVB 23/66/144    #174290
+                   FRAMBOISE   CMJN 0/74/0/0     RVB 236/100/161  #EB63A0
+
+     Secondaires   #162259  #3D276E  #6A2B62  #A879B4
+                   #F4ABBF  #D1D9E8  #F4E4D9  #FBF4EE
+
+     Typographie   Kumbh Sans
+     Gimmicks      triangle, chevron, cercle — framboise
+     Trame         grille de points bleu / framboise
+
+   Les nuances intermédiaires sont interpolées à partir de ces teintes de marque
+   afin de disposer d'une échelle utilisable en interface, sans introduire de
+   couleur étrangère à la charte.
+   =========================================================================== */
+
+@theme {
+  /* --- Bleu ESME : couleur primaire ------------------------------------- */
+  --color-esme-50: #f2f6fc;
+  --color-esme-100: #e3ecf8;
+  --color-esme-200: #d1d9e8; /* secondaire charte */
+  --color-esme-300: #a8bde0;
+  --color-esme-400: #5b86cc;
+  --color-esme-500: #2a5aa8;
+  --color-esme-600: #174290; /* BLEU ESME — couleur principale */
+  --color-esme-700: #173877;
+  --color-esme-800: #162259; /* secondaire charte */
+  --color-esme-900: #111b45;
+  --color-esme-950: #0b1230;
+
+  /* --- Framboise : couleur d'accentuation ------------------------------- */
+  --color-framboise-50: #fdf2f7;
+  --color-framboise-100: #fce4ee;
+  --color-framboise-200: #f8c8dc;
+  --color-framboise-300: #f4abbf; /* secondaire charte */
+  --color-framboise-400: #eb63a0; /* FRAMBOISE — couleur principale */
+  --color-framboise-500: #d94a8b;
+  --color-framboise-600: #be3a74;
+  --color-framboise-700: #9c2e5f;
+  --color-framboise-800: #6a2b62; /* prune, secondaire charte */
+
+  /* --- Violets et crèmes de la charte ----------------------------------- */
+  --color-violet-600: #4b3185;
+  --color-violet-700: #3d276e; /* secondaire charte */
+  --color-mauve-300: #c3a3cb;
+  --color-mauve-400: #a879b4; /* secondaire charte */
+  --color-creme-100: #fbf4ee; /* secondaire charte */
+  --color-creme-200: #f4e4d9; /* secondaire charte */
+
+  /* --- Neutres : gris bleutés dérivés du bleu ESME ----------------------- */
+  --color-ink-50: #f7f8fb;
+  --color-ink-100: #eef1f6;
+  --color-ink-200: #e2e8f2;
+  --color-ink-300: #cbd4e4;
+  --color-ink-400: #94a0ba;
+  --color-ink-500: #67738f;
+  --color-ink-600: #4a5570;
+  --color-ink-700: #313a53;
+  --color-ink-800: #1e2538;
+  --color-ink-900: #111726;
+
+  /* --- Couleurs d'état --------------------------------------------------
+     Le vert et l'ambre n'existent pas dans la charte, qui ne couvre pas les
+     interfaces applicatives. Ils sont réservés aux signaux de statut
+     (conforme / à vérifier / bloquant) où la couleur porte du sens et ne peut
+     pas être rendue par le bleu et la framboise seuls. Chaque statut est aussi
+     porté par un libellé et une icône, jamais par la couleur seule. */
+  --color-ok-50: #eef8f3;
+  --color-ok-100: #d4ede1;
+  --color-ok-500: #108b5c;
+  --color-ok-600: #0d7049;
+  --color-ok-700: #0a5739;
+
+  --color-warn-50: #fdf6e9;
+  --color-warn-100: #faeacb;
+  --color-warn-500: #b47811;
+  --color-warn-600: #93600c;
+  --color-warn-700: #714a09;
+
+  --color-danger-50: #fdf0f1;
+  --color-danger-100: #fbdadd;
+  --color-danger-500: #c62335;
+  --color-danger-600: #a41b2b;
+  --color-danger-700: #821522;
+
+  /* --- Typographie ------------------------------------------------------- */
+  --font-sans: var(--font-kumbh), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "Menlo", monospace;
+
+  /* --- Rayons, ombres, transitions --------------------------------------- */
+  --radius-xs: 0.25rem;
+  --radius-4xl: 2rem;
+
+  --shadow-card: 0 1px 2px rgb(17 27 69 / 0.04), 0 8px 24px -14px rgb(17 27 69 / 0.16);
+  --shadow-lift: 0 2px 4px rgb(17 27 69 / 0.06), 0 18px 40px -18px rgb(17 27 69 / 0.24);
+  --shadow-pop: 0 24px 60px -24px rgb(17 27 69 / 0.38);
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ---------------------------------------------------------------------------
+   TENDERA est un outil de travail utilisé en continu : le thème clair est le
+   thème de référence, le thème sombre reste disponible pour les sessions
+   prolongées. Les deux conservent les couleurs de marque.
+   --------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+  --surface: #ffffff;
+  --surface-sunken: var(--color-ink-50);
+  --surface-raised: #ffffff;
+  --surface-border: var(--color-ink-200);
+  --surface-ink: var(--color-ink-800);
+  --surface-ink-muted: var(--color-ink-500);
+  --surface-heading: var(--color-esme-900);
+  --rail: var(--color-esme-900);
+  --rail-ink: #ffffff;
+  --rail-ink-muted: #b9c4de;
+  --rail-active: var(--color-esme-700);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #0f1426;
+  --surface-sunken: #0a0f1e;
+  --surface-raised: #161d33;
+  --surface-border: #26304b;
+  --surface-ink: #dde3f0;
+  --surface-ink-muted: #8e9ab8;
+  --surface-heading: #ffffff;
+  --rail: #0a0f1e;
+  --rail-ink: #ffffff;
+  --rail-ink-muted: #8e9ab8;
+  --rail-active: var(--color-esme-700);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--surface-sunken);
+    color: var(--surface-ink);
+    font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--surface-heading);
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  /* Focus clavier visible partout : exigence d'accessibilité de la charte. */
+  :focus-visible {
+    outline: 2px solid var(--color-framboise-400);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  ::selection {
+    background: var(--color-framboise-100);
+    color: var(--color-esme-900);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
+  /* Barres de défilement discrètes, y compris sur le Kanban horizontal. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-300) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-ink-300);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* --- Trame de la charte : grille de points ----------------------------- */
+  .tendera-trame {
+    background-image: radial-gradient(circle, rgb(255 255 255 / 0.22) 1px, transparent 1px);
+    background-size: 14px 14px;
+  }
+  .tendera-trame-ink {
+    background-image: radial-gradient(circle, rgb(23 66 144 / 0.16) 1px, transparent 1px);
+    background-size: 14px 14px;
+  }
+
+  /* --- Gimmick chevron de la charte, en séparateur de section ------------- */
+  .tendera-chevron::before {
+    content: "";
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-top: 0.32em solid transparent;
+    border-bottom: 0.32em solid transparent;
+    border-left: 0.42em solid var(--color-framboise-400);
+    margin-right: 0.5em;
+    vertical-align: baseline;
+  }
+
+  /* --- Zone de dépôt du Kanban ------------------------------------------- */
+  .kanban-drop-active {
+    outline: 2px dashed var(--color-framboise-400);
+    outline-offset: -4px;
+    background: var(--color-framboise-50);
+  }
+
+  /* --- Texte long des analyses et mémoires ------------------------------- */
+  .prose-tendera {
+    color: var(--surface-ink);
+    line-height: 1.7;
+  }
+  .prose-tendera > * + * {
+    margin-top: 0.9em;
+  }
+  .prose-tendera h3 {
+    font-size: 1.0625rem;
+    font-weight: 600;
+    margin-top: 1.6em;
+  }
+  .prose-tendera ul {
+    list-style: none;
+    padding-left: 0;
+  }
+  .prose-tendera ul > li {
+    position: relative;
+    padding-left: 1.25rem;
+  }
+  .prose-tendera ul > li + li {
+    margin-top: 0.4em;
+  }
+  .prose-tendera ul > li::before {
+    content: "";
+    position: absolute;
+    left: 0.1rem;
+    top: 0.62em;
+    width: 0.35rem;
+    height: 0.35rem;
+    border-radius: 999px;
+    background: var(--color-framboise-400);
+  }
+}
+
+@utility surface {
+  background: var(--surface-raised);
+  border-color: var(--surface-border);
+}
