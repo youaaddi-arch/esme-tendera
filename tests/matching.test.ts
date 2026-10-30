@@ -292,6 +292,176 @@ describe("moteur de matching", () => {
     );
   });
 
+  it("reconnaît un marché de formation hors catalogue comme réalisable", () => {
+    // Le catalogue affine le matching ; il ne délimite pas le périmètre.
+    const outcome = runMatching(
+      {
+        title: "Marché de formation à la comptabilité publique et à la gestion budgétaire",
+        objectSummary:
+          "Formation de 60 agents des services financiers à la comptabilité publique, à l'exécution budgétaire et au contrôle interne comptable.",
+      },
+      referential,
+      WEIGHTS,
+    );
+
+    assert.equal(outcome.isFormation, true, "devrait être reconnu comme de la formation");
+    assert.ok(
+      ["FORMATION_REALISABLE", "FORMATION_VOISINE", "FORMATION_CATALOGUE"].includes(outcome.nature),
+      `nature inattendue : ${outcome.nature}`,
+    );
+    assert.ok(!outcome.recommendation.includes("écarter"), outcome.recommendation);
+  });
+
+  it("écarte l'apprentissage d'un métier manuel hors du champ de l'ESME", () => {
+    for (const title of [
+      "Formation aux métiers de l'esthétique et de la coiffure",
+      "Marché de formation en pâtisserie et boulangerie",
+      "Formation aux techniques de maçonnerie et de plomberie",
+    ]) {
+      const outcome = runMatching({ title }, referential, WEIGHTS);
+      assert.equal(outcome.isFormation, true, title);
+      assert.equal(outcome.nature, "FORMATION_METIER_MANUEL", `${title} → ${outcome.nature}`);
+    }
+  });
+
+  it("ne prend pas un nom d'institution pour un métier manuel", () => {
+    // « Mutualité Sociale Agricole » désigne un acheteur, pas un métier.
+    const outcome = runMatching(
+      { title: "Marché de prestations de formation pour les élus de la Mutualité Sociale Agricole" },
+      referential,
+      WEIGHTS,
+    );
+    assert.notEqual(outcome.nature, "FORMATION_METIER_MANUEL", outcome.natureLabel);
+  });
+
+  it("ne déclasse pas un accord-cadre entier pour un seul lot manuel", () => {
+    // Douze lots de formation dont un en coiffure : le marché reste traitable,
+    // et le lot concerné est signalé.
+    const outcome = runMatching(
+      {
+        title: "Accord-cadre de formation des agents de la collectivité",
+        lots: [
+          { number: "1", title: "Bureautique et outils collaboratifs" },
+          { number: "2", title: "Management de proximité" },
+          { number: "3", title: "Coiffure et esthétique" },
+        ],
+      },
+      referential,
+      WEIGHTS,
+    );
+    assert.notEqual(outcome.nature, "FORMATION_METIER_MANUEL", outcome.natureLabel);
+    assert.ok(
+      outcome.formationSignals.some((signal) => signal.includes("lot 3")),
+      outcome.formationSignals.join(" | "),
+    );
+  });
+
+  it("ne confond pas un sujet technique d'ingénierie avec un métier manuel", () => {
+    // « habilitation électrique » et « installation photovoltaïque » relèvent
+    // bien du champ de l'ESME, même s'ils touchent au geste technique.
+    for (const title of [
+      "Formation à l'habilitation électrique des agents techniques",
+      "Formation au dimensionnement des installations photovoltaïques",
+      "Formation à la maintenance industrielle des équipements",
+    ]) {
+      const outcome = runMatching({ title }, referential, WEIGHTS);
+      assert.notEqual(outcome.nature, "FORMATION_METIER_MANUEL", `${title} → ${outcome.nature}`);
+    }
+  });
+
+  it("écarte un marché de travaux dans un centre de formation", () => {
+    // Deux occurrences du mot « formation », et pourtant des travaux : c'est
+    // la nature déclarée par l'acheteur qui tranche.
+    const outcome = runMatching(
+      {
+        title: "Travaux d'extension de l'atelier de carrosserie du centre de formation",
+        marketTypes: ["TRAVAUX"],
+      },
+      referential,
+      WEIGHTS,
+    );
+    assert.equal(outcome.isFormation, false, outcome.formationSignals.join(" | "));
+    assert.equal(outcome.nature, "HORS_CHAMP");
+  });
+
+  it("écarte un marché de fournitures livrées à un centre de formation", () => {
+    const outcome = runMatching(
+      {
+        title: "Achat et livraison de denrées alimentaires pour le centre de formation",
+        marketTypes: ["FOURNITURES"],
+      },
+      referential,
+      WEIGHTS,
+    );
+    assert.equal(outcome.isFormation, false);
+  });
+
+  it("écarte un objet d'acquisition même sans nature déclarée", () => {
+    const outcome = runMatching(
+      { title: "Acquisition d'un bus numérique itinérant pour le centre de formation" },
+      referential,
+      WEIGHTS,
+    );
+    assert.equal(outcome.isFormation, false, outcome.formationSignals.join(" | "));
+  });
+
+  it("retient un marché de services de formation", () => {
+    const outcome = runMatching(
+      {
+        title: "Prestations de formation des agents aux outils numériques",
+        marketTypes: ["SERVICES"],
+      },
+      referential,
+      WEIGHTS,
+    );
+    assert.equal(outcome.isFormation, true);
+  });
+
+  it("fait primer un code CPV de formation sur la nature déclarée", () => {
+    // Un marché classé « fournitures » mais porteur d'un CPV 80 reste une
+    // prestation de formation : c'est le classement de l'acheteur.
+    const outcome = runMatching(
+      {
+        title: "Acquisition de modules de formation à destination des agents",
+        marketTypes: ["FOURNITURES"],
+        cpvCodes: ["80521000"],
+      },
+      referential,
+      WEIGHTS,
+    );
+    assert.equal(outcome.isFormation, true, outcome.formationSignals.join(" | "));
+  });
+
+  it("signale qu'un marché ne porte pas sur de la formation", () => {
+    const outcome = runMatching(
+      {
+        title: "Travaux de réfection de l'étanchéité de la toiture du gymnase",
+        objectSummary: "Reprise de l'étanchéité et remplacement des exutoires de fumée.",
+      },
+      referential,
+      WEIGHTS,
+    );
+    assert.equal(outcome.isFormation, false);
+    assert.equal(outcome.nature, "HORS_CHAMP");
+    assert.ok(outcome.natureLabel.includes("conservé"), outcome.natureLabel);
+  });
+
+  it("reconnaît la formation par le code CPV même sans vocabulaire explicite", () => {
+    const outcome = runMatching(
+      {
+        title: "Accompagnement à la montée en compétences des agents",
+        cpvCodes: ["80530000"],
+      },
+      referential,
+      WEIGHTS,
+    );
+    assert.equal(outcome.isFormation, true);
+    assert.ok(
+      outcome.formationSignals.some((signal) => signal.includes("CPV")),
+      outcome.formationSignals.join(" | "),
+    );
+  });
+
   it("ne produit rien sur un référentiel vide, et le dit", () => {
     const outcome = runMatching({ title: "Formation" }, [], WEIGHTS);
     assert.equal(outcome.scoreGlobal, 0);

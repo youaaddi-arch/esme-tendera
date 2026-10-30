@@ -42,7 +42,7 @@ type OdsResponse = {
 async function fetchWithRetry(
   url: URL,
   signal: AbortSignal | undefined,
-  attempts = 4,
+  attempts = 8,
 ): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -58,7 +58,10 @@ async function fetchWithRetry(
     } catch (error) {
       lastError = error;
       if (signal?.aborted) break;
-      await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+      // Attente croissante, plafonnée : le portail coupe des connexions par
+      // rafales, et insister trop vite ne fait qu'allonger la rafale.
+      const wait = Math.min(1500 * 2 ** attempt, 20_000);
+      await new Promise((resolve) => setTimeout(resolve, wait));
     }
   }
   throw new ConnectorUnavailableError(

@@ -345,6 +345,7 @@ export function normalizeBoampRecord(record: OdsRecord): NormalizedNotice | null
     objectSummary: title.slice(0, 4000),
     procedure: first(record, ["procedure_libelle", "type_procedure", "nature_libelle"]),
     cpvCodes,
+    marketTypes: readMarketTypes(record),
     publishedAt: parseDate(first(record, ["dateparution"])),
     deadlineAt: deadline,
     executionPlace: first(record, ["code_departement_prestation", "code_departement"]),
@@ -379,6 +380,16 @@ function readableReference(record: OdsRecord, idweb: string): string {
   const isGuid = folder ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(folder) : false;
   if (folder && !isGuid && folder.length <= 60) return folder;
   return `BOAMP ${idweb}`;
+}
+
+/** Nature du marché, exposée par le BOAMP sous forme de tableau. */
+function readMarketTypes(record: OdsRecord): string[] {
+  const raw = record["type_marche"] ?? record["type_marche_facette"];
+  if (Array.isArray(raw)) {
+    return [...new Set(raw.filter((item): item is string => typeof item === "string"))];
+  }
+  if (typeof raw === "string" && raw.trim()) return [raw.trim()];
+  return [];
 }
 
 function parseDonnees(value: unknown): unknown {

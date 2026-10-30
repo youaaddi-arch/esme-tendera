@@ -37,10 +37,14 @@ export const connectorRegistry: ConnectorDefinition[] = [
       "Aucun compte requis. L'hôte boamp-datadila.opendatasoft.com doit être joignable depuis le serveur : dans un environnement à sortie filtrée, ajoutez-le à la liste d'autorisation.",
     enabledByDefault: true,
     defaultConfig: {
-      // Nombre d'avis récupérés par exécution, et profondeur de l'historique.
+      // La recherche étant volontairement large, il faut assez de pages pour
+      // ne pas tronquer la moisson : 100 avis par page, jusqu'à 25 pages.
       pageSize: 100,
-      maxPages: 5,
-      lookbackDays: 7,
+      maxPages: 25,
+      // Trente jours, pas sept : un avis publié il y a trois semaines dont la
+      // date limite tombe dans deux mois est encore à traiter. La
+      // déduplication fait que revoir un avis ne coûte rien.
+      lookbackDays: 30,
     },
   },
   {

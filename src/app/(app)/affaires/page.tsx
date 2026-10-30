@@ -24,7 +24,7 @@ export default async function AffairesPage({
 }: {
   searchParams: Promise<{
     q?: string; etape?: string; responsable?: string; resultat?: string;
-    region?: string; archivees?: string; tri?: string;
+    region?: string; archivees?: string; tri?: string; echues?: string;
   }>;
 }) {
   const session = await requireSession();
@@ -39,6 +39,11 @@ export default async function AffairesPage({
           ? { createdAt: "desc" }
           : { deadlineAt: "asc" };
 
+  // Par défaut, on ne montre que les consultations encore ouvertes : une veille
+  // sur trente jours ramène des avis déjà échus, utiles en archive mais qui
+  // n'ont rien à faire en tête de liste.
+  const showExpired = params.echues === "1";
+
   const [tenders, users, regions] = await Promise.all([
     prisma.tender.findMany({
       where: {
@@ -47,6 +52,9 @@ export default async function AffairesPage({
         ...(params.responsable ? { ownerId: params.responsable } : {}),
         ...(params.resultat ? { outcome: params.resultat as never } : {}),
         ...(params.region ? { region: params.region } : {}),
+        ...(showExpired || params.tri === "score" || params.archivees === "1"
+          ? {}
+          : { OR: [{ deadlineAt: null }, { deadlineAt: { gte: new Date() } }] }),
         ...(params.q
           ? {
               OR: [
@@ -124,6 +132,10 @@ export default async function AffairesPage({
               ]}
               allLabel="Date limite"
             />
+            <label className="flex items-center gap-1.5 pb-2 text-[13px] text-ink-700">
+              <input type="checkbox" name="echues" value="1" defaultChecked={showExpired} className="size-4 accent-[var(--color-esme-600)]" />
+              Inclure les échues
+            </label>
             <label className="flex items-center gap-1.5 pb-2 text-[13px] text-ink-700">
               <input type="checkbox" name="archivees" value="1" defaultChecked={params.archivees === "1"} className="size-4 accent-[var(--color-esme-600)]" />
               Archives

@@ -67,17 +67,20 @@ const DEFAULTS = {
   veille: {
     dailyHour: 7,
     timezone: "Europe/Paris",
-    keywords: [
-      "formation", "formation continue", "formation professionnelle",
-      "montée en compétences", "développement des compétences",
-      "ingénierie pédagogique", "transition énergétique", "efficacité énergétique",
-      "photovoltaïque", "smart grid", "réseaux électriques", "data center",
-      "industrie 4.0", "fabrication additive", "robotique", "automatisation",
-      "intelligence artificielle", "cybersécurité", "données", "numérique",
-      "transformation digitale", "management de projet", "leadership",
-      "conduite du changement", "innovation", "RSE",
-    ],
-    // CPV du champ « services de formation » et voisins.
+    // Un seul terme, volontairement large.
+    //
+    // Une liste de mots-clés par domaine (photovoltaïque, smart grid, IA…)
+    // fait deux dégâts : elle rate les marchés de formation dont l'intitulé
+    // n'emploie aucun de ces mots, et elle ramène des marchés de travaux qui
+    // n'ont rien à voir parce qu'ils contiennent « innovation » ou « données ».
+    //
+    // On ratisse donc sur « formation », et c'est le moteur de matching qui
+    // juge la pertinence — affichée sur chaque affaire. Aucun avis n'est écarté
+    // en silence : tous sont visibles, avec leur score et leur appréciation.
+    keywords: ["formation"],
+    // CPV du champ « services de formation ». Non utilisés pour filtrer la
+    // requête — le BOAMP n'expose pas de colonne CPV — mais conservés comme
+    // référence pour les connecteurs qui le permettront.
     cpvCodes: ["80000000", "80500000", "80510000", "80511000", "80530000", "80532000", "79632000"],
   } satisfies VeilleSettings,
 } as const;

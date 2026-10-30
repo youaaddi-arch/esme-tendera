@@ -1,23 +1,39 @@
 import { Clock, Play, Radar } from "lucide-react";
 
 import { ActionButton, ActionForm } from "@/components/app/action-form";
+import Link from "next/link";
+
 import { Badge, Card, CardHeader, Field, Input, Notice, PageHeader, Table, Td, Textarea, Th } from "@/components/ui";
 import { runConnectorAction, toggleConnectorAction, updateVeilleSettingsAction } from "./actions";
 import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/rbac";
-import { connectorStatusLabels, formatDateTime } from "@/lib/labels";
+import {
+  connectorStatusLabels, formatAmount, formatDate, formatDateTime, natureLabels, natureOrder,
+  natureTone,
+} from "@/lib/labels";
 import { getSetting } from "@/lib/settings";
 
 export const metadata = { title: "Veille" };
 export const dynamic = "force-dynamic";
 
-export default async function VeillePage() {
+export default async function VeillePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ nature?: string; jours?: string }>;
+}) {
   const session = await requireSession();
+  const params = await searchParams;
   const canRun = can(session.role, "veille.run");
   const canConfigure = can(session.role, "veille.configure");
 
-  const [connectors, runs, settings] = await Promise.all([
+  // Fenêtre d'affichage des avis récupérés : tout ce que la veille a ramené
+  // reste accessible, sans aucun pré-filtrage par pertinence.
+  const windowDays = Math.max(1, Math.min(90, Number.parseInt(params.jours ?? "7", 10) || 7));
+  const since = new Date();
+  since.setDate(since.getDate() - windowDays);
+
+  const [connectors, runs, settings, harvested, natureCounts] = await Promise.all([
     prisma.sourceConnector.findMany({ orderBy: [{ status: "asc" }, { name: "asc" }] }),
     prisma.veilleRun.findMany({
       orderBy: { startedAt: "desc" },
@@ -25,7 +41,31 @@ export default async function VeillePage() {
       include: { connector: { select: { name: true } } },
     }),
     getSetting("veille"),
+    prisma.tender.findMany({
+      where: {
+        createdAt: { gte: since },
+        sourceConnector: { isNot: null },
+        ...(params.nature ? { matchResult: { nature: params.nature as never } } : {}),
+      },
+      orderBy: [{ matchResult: { scoreGlobal: "desc" } }, { createdAt: "desc" }],
+      take: 400,
+      select: {
+        id: true, reference: true, title: true, buyer: true, deadlineAt: true,
+        amountKind: true, amountMinEur: true, amountMaxEur: true, createdAt: true,
+        sourceConnector: { select: { name: true } },
+        matchResult: { select: { scoreGlobal: true, nature: true, natureLabel: true } },
+        _count: { select: { lots: true } },
+      },
+    }),
+    prisma.matchResult.groupBy({
+      by: ["nature"],
+      where: { tender: { createdAt: { gte: since }, sourceConnector: { isNot: null } } },
+      _count: { _all: true },
+    }),
   ]);
+
+  const byNature = Object.fromEntries(natureCounts.map((row) => [row.nature, row._count._all]));
+  const totalHarvested = natureCounts.reduce((sum, row) => sum + row._count._all, 0);
 
   const operational = connectors.filter((connector) => connector.status === "OPERATIONNEL");
   const lastRun = runs[0];
@@ -55,6 +95,134 @@ export default async function VeillePage() {
             d&apos;affaire.
           </p>
         </Notice>
+
+        {/* --- Tout ce que la veille a ramené --- */}
+        <Card>
+          <CardHeader
+            title="Avis récupérés"
+            subtitle={`${totalHarvested} avis sur les ${windowDays} derniers jours. Tous sont conservés et accessibles : l'appréciation est une aide au tri, pas un filtre.`}
+            action={
+              <form method="get" className="flex items-center gap-2">
+                <label className="text-[12px] text-ink-600">
+                  Fenêtre
+                  <select
+                    name="jours"
+                    defaultValue={String(windowDays)}
+                    className="ml-1.5 h-8 rounded-lg border border-ink-300 bg-white px-2 text-[12px]"
+                  >
+                    <option value="1">24 heures</option>
+                    <option value="7">7 jours</option>
+                    <option value="30">30 jours</option>
+                    <option value="90">90 jours</option>
+                  </select>
+                </label>
+                <input type="hidden" name="nature" value={params.nature ?? ""} />
+                <button
+                  type="submit"
+                  className="h-8 rounded-full border border-ink-300 bg-white px-3 text-[12px] text-esme-800 hover:bg-esme-50"
+                >
+                  Appliquer
+                </button>
+              </form>
+            }
+          />
+
+          {/* Répartition par appréciation, qui sert aussi de filtre. */}
+          <div className="flex flex-wrap gap-2 border-b border-ink-100 px-5 py-3">
+            <Link
+              href={`/veille?jours=${windowDays}`}
+              className={`rounded-full px-3 py-1 text-[12px] ring-1 ring-inset ${
+                params.nature ? "bg-white text-ink-600 ring-ink-200" : "bg-esme-600 text-white ring-esme-600"
+              }`}
+            >
+              Tous ({totalHarvested})
+            </Link>
+            {natureOrder.map((nature) => (
+              <Link
+                key={nature}
+                href={`/veille?jours=${windowDays}&nature=${nature}`}
+                className={`rounded-full px-3 py-1 text-[12px] ring-1 ring-inset ${
+                  params.nature === nature
+                    ? "bg-esme-600 text-white ring-esme-600"
+                    : "bg-white text-ink-600 ring-ink-200 hover:bg-esme-50"
+                }`}
+              >
+                {natureLabels[nature]} ({byNature[nature] ?? 0})
+              </Link>
+            ))}
+          </div>
+
+          {harvested.length === 0 ? (
+            <p className="px-5 py-8 text-center text-[13px] text-ink-500">
+              Aucun avis sur cette fenêtre. Lancez une synchronisation, ou élargissez la période.
+            </p>
+          ) : (
+            <Table>
+              <thead>
+                <tr>
+                  <Th className="w-28">Référence</Th>
+                  <Th>Marché</Th>
+                  <Th className="w-56">Appréciation</Th>
+                  <Th className="w-28">Date limite</Th>
+                  <Th className="w-36">Montant</Th>
+                  <Th className="w-20">Score</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {harvested.map((tender) => (
+                  <tr key={tender.id}>
+                    <Td>
+                      <Link
+                        href={`/affaires/${tender.id}`}
+                        className="font-mono text-[12px] font-medium text-esme-700 hover:underline"
+                      >
+                        {tender.reference}
+                      </Link>
+                      <p className="mt-0.5 text-[11px] text-ink-400">
+                        {tender.sourceConnector?.name?.split(" — ")[0] ?? "—"}
+                      </p>
+                    </Td>
+                    <Td>
+                      <Link
+                        href={`/affaires/${tender.id}`}
+                        className="text-[13px] font-medium text-esme-900 hover:text-esme-600"
+                      >
+                        {tender.title}
+                      </Link>
+                      <p className="mt-0.5 text-[12px] text-ink-500">
+                        {tender.buyer}
+                        {tender._count.lots > 0 ? ` · ${tender._count.lots} lot(s)` : ""}
+                      </p>
+                    </Td>
+                    <Td>
+                      {tender.matchResult ? (
+                        <>
+                          <Badge tone={natureTone(tender.matchResult.nature)}>
+                            {natureLabels[tender.matchResult.nature]}
+                          </Badge>
+                          {tender.matchResult.natureLabel ? (
+                            <p className="mt-1 text-[11px] leading-snug text-ink-500">
+                              {tender.matchResult.natureLabel}
+                            </p>
+                          ) : null}
+                        </>
+                      ) : (
+                        <span className="text-[12px] text-ink-400">Matching non calculé</span>
+                      )}
+                    </Td>
+                    <Td className="text-[12px]">{formatDate(tender.deadlineAt)}</Td>
+                    <Td className="text-[12px]">
+                      {formatAmount(tender.amountKind, tender.amountMinEur, tender.amountMaxEur)}
+                    </Td>
+                    <Td className="text-[13px] font-semibold tabular-nums text-esme-900">
+                      {tender.matchResult ? Math.round(tender.matchResult.scoreGlobal) : "—"}
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </Card>
 
         {/* --- Connecteurs --- */}
         <Card>

@@ -2,7 +2,7 @@ import type {
   AmountKind, ConnectorStatus, DceStatus, DocumentKind, GoNoGoStatus, KnowledgeCategory,
   NegotiationKind, NoGoReason, NotificationKind, OutcomeStatus, PipelineStage,
   RequirementLevel, RequirementStatus, ResponseDocStatus, ResponseDocType, TaskStatus,
-  TrainingOrigin,
+  TenderNature, TrainingOrigin,
 } from "@prisma/client";
 
 /** Libellés français des énumérations, et ordre d'affichage des pipelines. */
@@ -198,6 +198,45 @@ export const connectorStatusLabels: Record<ConnectorStatus, string> = {
   A_IMPLEMENTER: "À implémenter",
   DESACTIVE: "Désactivé",
 };
+
+/**
+ * Appréciation de la consultation.
+ *
+ * ESME Executive Education intervient en formation continue professionnelle
+ * généraliste, tous secteurs — un positionnement comparable à celui de Cegos,
+ * M2i ou ORSYS — avec une appétence marquée pour les sujets d'ingénieur.
+ *
+ * Un marché de formation est donc dans le périmètre par défaut. Le catalogue
+ * ne délimite rien : il mesure l'affinité, c'est-à-dire la part du besoin déjà
+ * couverte par une offre existante. La seule exclusion est l'apprentissage
+ * d'un métier manuel étranger au champ de l'établissement.
+ */
+export const natureLabels: Record<TenderNature, string> = {
+  FORMATION_CATALOGUE: "Formation — cœur de catalogue",
+  FORMATION_VOISINE: "Formation — proche du catalogue",
+  FORMATION_REALISABLE: "Formation — dans le périmètre",
+  FORMATION_METIER_MANUEL: "Métier manuel — hors périmètre",
+  HORS_CHAMP: "Ne porte pas sur de la formation",
+};
+
+/** Ordre de pertinence décroissante, pour les listes et les filtres. */
+export const natureOrder: TenderNature[] = [
+  "FORMATION_CATALOGUE",
+  "FORMATION_VOISINE",
+  "FORMATION_REALISABLE",
+  "FORMATION_METIER_MANUEL",
+  "HORS_CHAMP",
+];
+
+export function natureTone(nature: TenderNature): "ok" | "esme" | "warn" | "neutral" {
+  // Les trois premières sont toutes dans le périmètre : elles se distinguent
+  // par l'affinité au catalogue, pas par une frontière.
+  if (nature === "FORMATION_CATALOGUE") return "ok";
+  if (nature === "FORMATION_VOISINE") return "esme";
+  if (nature === "FORMATION_REALISABLE") return "esme";
+  if (nature === "FORMATION_METIER_MANUEL") return "warn";
+  return "neutral";
+}
 
 export const originLabels: Record<TrainingOrigin, string> = {
   CATALOGUE_ESME: "Catalogue ESME",

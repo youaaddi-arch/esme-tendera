@@ -315,6 +315,10 @@ model Tender {
   objectSummary   String?
   procedure       String?
   cpvCodes        String[] @default([])
+  /// Nature du marché déclarée par l'acheteur : SERVICES, TRAVAUX, FOURNITURES.
+  /// C'est elle qui distingue « marché de formation » de « travaux dans un
+  /// centre de formation ».
+  marketTypes     String[] @default([])
   lotLabel        String?
 
   publishedAt      DateTime?
@@ -643,10 +647,37 @@ model Requirement {
 // Matching
 // ---------------------------------------------------------------------------
 
+/// Nature de la consultation, évaluée indépendamment des domaines du catalogue.
+///
+/// Le catalogue sert à affiner le matching, pas à délimiter le périmètre :
+/// l'ESME intervient sur l'ensemble de la formation continue professionnelle.
+/// La seule exclusion est l'apprentissage d'un métier manuel étranger à son
+/// champ — esthétique, coiffure, métiers de bouche, métiers du bâtiment.
+enum TenderNature {
+  /// Formation, dans un domaine couvert par le catalogue ESME.
+  FORMATION_CATALOGUE
+  /// Formation, dans un domaine voisin ou mobilisable via le Groupe IONIS.
+  FORMATION_VOISINE
+  /// Formation hors catalogue, mais dans le champ d'intervention de l'ESME.
+  FORMATION_REALISABLE
+  /// Apprentissage d'un métier manuel hors du champ de l'ESME.
+  FORMATION_METIER_MANUEL
+  /// Le marché ne paraît pas porter sur de la formation.
+  HORS_CHAMP
+}
+
 model MatchResult {
   id       String @id @default(cuid())
   tenderId String @unique
   tender   Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  /// La consultation porte-t-elle sur de la formation professionnelle ?
+  isFormation      Boolean      @default(false)
+  /// Indices ayant fondé cette conclusion.
+  formationSignals String[]     @default([])
+  nature           TenderNature @default(HORS_CHAMP)
+  /// Appréciation en clair, affichée sur l'affaire.
+  natureLabel      String?
 
   /// Score A — adéquation au catalogue ESME, sur 100.
   scoreCatalogue Float @default(0)

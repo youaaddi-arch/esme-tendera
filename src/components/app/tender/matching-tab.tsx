@@ -6,7 +6,7 @@ import { ActionButton, ActionForm } from "@/components/app/action-form";
 import { ScoreGauges } from "@/components/app/charts";
 import { Badge, Card, CardHeader, EmptyState, Field, Input, Notice, Table, Td, Textarea, Th } from "@/components/ui";
 import { clearOverrideAction, overrideMatchingAction, recomputeMatchingAction } from "@/app/(app)/affaires/[id]/actions";
-import { formatDateTime } from "@/lib/labels";
+import { formatDateTime, natureLabels, natureTone } from "@/lib/labels";
 import type { TenderDetail } from "@/lib/tender-detail";
 import type { Permission } from "@/lib/rbac";
 
@@ -191,8 +191,26 @@ export function MatchingTab({ tender, permissions }: { tender: TenderDetail; per
         </Card>
 
         <Card>
-          <CardHeader title="Recommandation" />
+          <CardHeader
+            title="Appréciation"
+            subtitle="Nature du marché, évaluée indépendamment des domaines du catalogue."
+          />
           <div className="space-y-3 p-5 text-[13px]">
+            <Badge tone={natureTone(result.nature)}>{natureLabels[result.nature]}</Badge>
+            {result.natureLabel ? <p className="text-ink-800">{result.natureLabel}</p> : null}
+            {result.formationSignals.length > 0 ? (
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-ink-400">
+                  Ce qui a fondé cette appréciation
+                </p>
+                <ul className="mt-1 space-y-1 text-[12px] text-ink-600">
+                  {result.formationSignals.map((signal, index) => (
+                    <li key={index} className="tendera-chevron">{signal}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <hr className="border-ink-100" />
             <p className="text-ink-800">{result.recommendation}</p>
             {result.adaptableNote ? (
               <div>

@@ -23,6 +23,8 @@ export type MatchingInput = {
   objectSummary?: string | null;
   buyer?: string | null;
   cpvCodes?: string[];
+  /** Nature du marché déclarée par l'acheteur : SERVICES, TRAVAUX, FOURNITURES. */
+  marketTypes?: string[];
   lots?: { number: string; title: string; description?: string | null }[];
   /** Éléments issus de l'analyse du DCE, quand elle a eu lieu. */
   analysis?: {
@@ -50,12 +52,40 @@ export type TrainingScore = {
   rationale: string;
 };
 
+/**
+ * Nature de la consultation, indépendamment des domaines du catalogue.
+ *
+ * ESME Executive Education intervient en formation continue professionnelle
+ * généraliste, tous secteurs — un positionnement comparable à celui de Cegos,
+ * M2i ou ORSYS — avec une appétence marquée pour les sujets d'ingénieur. Un
+ * marché de formation est donc dans le périmètre par défaut.
+ *
+ * Le catalogue mesure l'affinité — la part du besoin déjà couverte par une
+ * offre existante — et non une frontière. Un score faible dit « nous n'avons
+ * pas encore de programme sur étagère », pas « ce n'est pas pour nous ». La
+ * seule exclusion est l'apprentissage d'un métier manuel étranger au champ de
+ * l'établissement.
+ */
+export type TenderNature =
+  | "FORMATION_CATALOGUE"
+  | "FORMATION_VOISINE"
+  | "FORMATION_REALISABLE"
+  | "FORMATION_METIER_MANUEL"
+  | "HORS_CHAMP";
+
 export type MatchingOutcome = {
   scoreCatalogue: number;
   scoreVoisines: number;
   scoreIonis: number;
   scoreGlobal: number;
   weights: ScoringWeights;
+  /** La consultation porte-t-elle sur de la formation professionnelle ? */
+  isFormation: boolean;
+  /** Indices qui ont fait conclure qu'il s'agit (ou non) de formation. */
+  formationSignals: string[];
+  nature: TenderNature;
+  /** Appréciation en clair, affichée sur l'affaire. */
+  natureLabel: string;
   matches: TrainingScore[];
   coveredSkills: string[];
   missingSkills: string[];
@@ -142,7 +172,12 @@ export function runMatching(
   if (active.length === 0) {
     return {
       scoreCatalogue: 0, scoreVoisines: 0, scoreIonis: 0, scoreGlobal: 0,
-      weights, matches: [], coveredSkills: [], missingSkills: [],
+      weights,
+      isFormation: false,
+      formationSignals: ["Référentiel vide : la nature de la consultation n'a pas été évaluée."],
+      nature: "HORS_CHAMP",
+      natureLabel: "Évaluation impossible : le référentiel pédagogique est vide.",
+      matches: [], coveredSkills: [], missingSkills: [],
       adaptableNote: null, ionisNote: null, extraResources: [], constraints: [],
       recommendation: "Référentiel pédagogique vide : importez le catalogue avant de lancer le matching.",
       caveats: ["Aucune formation active dans le référentiel."],
@@ -294,9 +329,33 @@ export function runMatching(
           .join(" ; ")}. À confirmer avec l'établissement concerné.`
       : null;
 
+  // Nature de la consultation, évaluée indépendamment des domaines couverts :
+  // un marché de formation hors catalogue reste un marché de formation.
+  const formation = assessFormation(input, queryConcepts);
+  const natureVerdict = classifyNature(
+    formation.isFormation,
+    { catalogue: scoreCatalogue, voisines: scoreVoisines, ionis: scoreIonis },
+    `${input.title} ${input.objectSummary ?? ""}`,
+  );
+
+  // Lots relevant d'un métier manuel : signalés sans déclasser l'affaire.
+  const manualLots = (input.lots ?? [])
+    .filter((lot) => detectMetierManuel(`${lot.title} ${lot.description ?? ""}`))
+    .map((lot) => `lot ${lot.number} — ${lot.title}`);
+  if (manualLots.length > 0) {
+    formation.signals.push(
+      `Lot(s) relevant d'un métier manuel hors périmètre : ${manualLots.slice(0, 5).join(" ; ")}. Les autres lots restent traitables.`,
+    );
+  }
+
   caveats.push(
     "Les trois scores mesurent l'adéquation pédagogique et opérationnelle, pas la probabilité de remporter le marché.",
   );
+  if (natureVerdict.nature === "FORMATION_REALISABLE") {
+    caveats.push(
+      "Un score faible ne vaut pas rejet : l'ESME intervient en formation continue généraliste, tous secteurs. Le score mesure l'affinité au catalogue, pas l'appartenance au périmètre.",
+    );
+  }
 
   return {
     scoreCatalogue,
@@ -311,9 +370,204 @@ export function runMatching(
     ionisNote,
     extraResources,
     constraints,
-    recommendation: buildRecommendation(scoreGlobal, scoreCatalogue, missingSkills.length),
+    isFormation: formation.isFormation,
+    formationSignals: formation.signals,
+    nature: natureVerdict.nature,
+    natureLabel: natureVerdict.label,
+    recommendation: buildRecommendation(
+      natureVerdict.nature,
+      scoreGlobal,
+      scoreCatalogue,
+      missingSkills.length,
+    ),
     caveats,
     engine: "deterministe",
+  };
+}
+
+/**
+ * La consultation porte-t-elle sur de la formation professionnelle ?
+ *
+ * Question volontairement distincte de l'adéquation au catalogue. Trois
+ * indices, du plus fiable au moins fiable :
+ *
+ *  1. un code CPV de la division 80 (« services d'enseignement et de
+ *     formation »), que l'acheteur a choisi lui-même ;
+ *  2. le vocabulaire explicite de la formation dans l'intitulé ou l'objet ;
+ *  3. les concepts de formation ou d'accompagnement repérés par le
+ *     dictionnaire métier, qui rattrapent « montée en compétences des agents ».
+ *
+ * Un seul indice suffit : l'enjeu est de ne pas écarter un marché de formation,
+ * pas de prouver qu'il en est un.
+ */
+export function assessFormation(
+  input: MatchingInput,
+  concepts: Set<string>,
+): { isFormation: boolean; signals: string[] } {
+  const signals: string[] = [];
+
+  const cpvFormation = (input.cpvCodes ?? []).filter((code) => /^80/.test(code));
+  if (cpvFormation.length > 0) {
+    signals.push(`Code CPV de formation déclaré par l'acheteur : ${cpvFormation.join(", ")}.`);
+  }
+
+  // La nature déclarée du marché tranche les cas trompeurs : « travaux
+  // d'extension de l'atelier du centre de formation » contient deux fois le
+  // mot formation, et reste un marché de travaux. Un code CPV de formation
+  // l'emporte toutefois : c'est le classement de l'acheteur lui-même.
+  const declared = (input.marketTypes ?? []).map((type) => type.toUpperCase());
+  const isServices = declared.some((type) => type.includes("SERVICE"));
+  const isWorksOrSupply = declared.some(
+    (type) => type.includes("TRAVAUX") || type.includes("FOURNITURE"),
+  );
+  if (isWorksOrSupply && !isServices && cpvFormation.length === 0) {
+    signals.push(
+      `Marché de ${declared.join(" et de ").toLowerCase()} d'après l'acheteur : ce n'est pas une prestation de formation, même si l'objet mentionne un centre de formation.`,
+    );
+    return { isFormation: false, signals };
+  }
+
+  const text = `${input.title} ${input.objectSummary ?? ""} ${(input.lots ?? [])
+    .map((lot) => lot.title)
+    .join(" ")}`;
+  const explicit =
+    /\bformation|\bformer\b|\bformateur|p[ée]dagogi|apprentissage|stage\s+de|s[ée]minaire|qualifiante|certifiante|mont[ée]e\s+en\s+comp[ée]tence/i.exec(
+      text,
+    );
+  if (explicit) {
+    signals.push(`Vocabulaire de la formation dans l'objet : « ${explicit[0]} ».`);
+  }
+
+  // Sans nature déclarée, un objet qui commence par un verbe d'achat ou de
+  // travaux est écarté, sauf si le vocabulaire de la formation en est bien
+  // l'objet et non le décor.
+  if (declared.length === 0 && cpvFormation.length === 0) {
+    const acquisition =
+      /^\s*(march[ée]\s+(de\s+)?)?(travaux|extension|construction|r[ée]fection|r[ée]novation|am[ée]nagement|acquisition|fourniture|achat|livraison|location|entretien|maintenance)\b/i.exec(
+        input.title,
+      );
+    const formationIsObject =
+      /(march[ée]|accord-cadre|prestations?|actions?|programmes?|parcours|sessions?)\s+(de\s+|d['’])?formation|formation\s+(des?|du|de\s+la|aux?|en|à)\s/i.test(
+        input.title,
+      );
+    if (acquisition && !formationIsObject) {
+      signals.push(
+        `L'objet porte sur « ${acquisition[0].trim()} » : la formation y est le contexte, pas la prestation attendue.`,
+      );
+      return { isFormation: false, signals };
+    }
+  }
+
+  const conceptHits = ["@formation", "@formation_formateurs", "@accompagnement"].filter((concept) =>
+    concepts.has(concept),
+  );
+  if (conceptHits.length > 0) {
+    signals.push(`Concepts métier repérés : ${conceptHits.map(conceptLabel).join(", ")}.`);
+  }
+
+  if (signals.length === 0) {
+    signals.push(
+      "Ni code CPV de formation, ni vocabulaire de la formation dans l'objet : ce marché ne semble pas porter sur de la formation.",
+    );
+    return { isFormation: false, signals };
+  }
+
+  return { isFormation: true, signals };
+}
+
+/**
+ * Métiers manuels étrangers au champ de l'ESME.
+ *
+ * C'est la seule exclusion de périmètre : l'établissement intervient sur
+ * l'ensemble de la formation continue professionnelle, mais n'enseigne pas un
+ * métier manuel comme l'esthétique, la coiffure, les métiers de bouche ou les
+ * métiers du bâtiment.
+ *
+ * La liste vise l'apprentissage du geste métier, pas les sujets techniques
+ * d'ingénierie : « habilitation électrique », « installation photovoltaïque »
+ * ou « maintenance industrielle » relèvent bien du champ de l'ESME et ne
+ * figurent pas ici.
+ */
+const METIERS_MANUELS = [
+  /esth[ée]ti(que|cienne?)|onglerie|proth[èe]siste\s+ongulaire|manucure|maquillage|spa\b|massage|baln[ée]o/i,
+  /coiffure|coiffeur|barbier|perruqui/i,
+  /cuisin(e|ier)|p[âa]tisser|boulanger|boucher|charcuti|traiteur|sommelier|barman|restauration\s+collective|arts\s+de\s+la\s+table/i,
+  /ma[çc]onnerie|plomberie|plombier|menuiser|charpent|couvreur|couverture\s+toiture|carrelage|plaquiste|peinture\s+en\s+b[âa]timent|pl[âa]trerie|[ée]tanch[ée]it[ée]\s+toiture|gros\s+œuvre/i,
+  /soudure|soudeur|chaudronner|serrurier|forgeron|taille\s+de\s+pierre|[ée]b[ée]nist/i,
+  /carrosserie|m[ée]canique\s+automobile|garagiste|pneumatique/i,
+  /couture|coutur[ìi]er|tapissier|cordonnier|maroquiner/i,
+  // « agricole » seul désignerait la Mutualité Sociale Agricole ou une chambre
+  // d'agriculture : on vise le geste métier, pas le secteur d'activité.
+  /fleuriste|horticult|mara[îi]chage|[ée]levage|viticult|p[ée]piniériste|bûcheron|sylvicult|machinisme\s+agricole|travaux\s+agricoles|exploitation\s+agricole/i,
+  /toilettage|palefrenier|mar[ée]chal-ferrant/i,
+  /aide\s+[àa]\s+domicile|auxiliaire\s+de\s+vie|garde\s+d.enfants|assistante?\s+maternelle/i,
+];
+
+function detectMetierManuel(text: string): string | null {
+  for (const pattern of METIERS_MANUELS) {
+    const found = pattern.exec(text);
+    if (found) return found[0];
+  }
+  return null;
+}
+
+/**
+ * Qualifie la consultation.
+ *
+ * Le catalogue affine le matching ; il ne délimite pas le périmètre. Un marché
+ * de formation continue professionnelle est donc réalisable par défaut, même
+ * hors catalogue. Seul l'apprentissage d'un métier manuel étranger au champ de
+ * l'ESME sort du périmètre.
+ */
+export function classifyNature(
+  isFormation: boolean,
+  scores: { catalogue: number; voisines: number; ionis: number },
+  /**
+   * Objet du marché seul — sans les intitulés de lots.
+   *
+   * Un accord-cadre de formation à douze lots dont un seul porte sur la
+   * coiffure reste un marché de formation : ce lot-là est hors périmètre, pas
+   * l'affaire entière. Les lots concernés sont signalés à part, et l'onglet
+   * Lots permet d'en faire des affaires distinctes.
+   */
+  text = "",
+): { nature: TenderNature; label: string } {
+  if (!isFormation) {
+    return {
+      nature: "HORS_CHAMP",
+      label:
+        "Ce marché ne paraît pas porter sur de la formation. Vérifiez l'objet avant de l'écarter : il a été conservé, pas supprimé.",
+    };
+  }
+
+  const metier = detectMetierManuel(text);
+  if (metier) {
+    return {
+      nature: "FORMATION_METIER_MANUEL",
+      label: `Formation à un métier manuel hors du champ de l'ESME (« ${metier} »). Hors périmètre, sauf décision contraire.`,
+    };
+  }
+
+  if (scores.catalogue >= 45) {
+    return {
+      nature: "FORMATION_CATALOGUE",
+      label:
+        "Formation continue professionnelle, directement couverte par le catalogue ESME. Forte affinité : des programmes existants répondent au besoin.",
+    };
+  }
+
+  if (scores.voisines >= 45 || scores.ionis >= 45) {
+    return {
+      nature: "FORMATION_VOISINE",
+      label:
+        "Formation continue professionnelle, proche du catalogue ou mobilisable au sein du Groupe IONIS. Une adaptation des programmes existants suffit probablement.",
+    };
+  }
+
+  return {
+    nature: "FORMATION_REALISABLE",
+    label:
+      "Formation continue professionnelle, dans le périmètre d'intervention de l'ESME. Aucun programme du catalogue ne couvre ce besoin : il est à concevoir. L'arbitrage porte sur les intervenants et la rentabilité, pas sur le périmètre.",
   };
 }
 
@@ -341,7 +595,21 @@ function buildRationale(
   return parts.length ? parts.join(" — ") : "Correspondance lexicale avec le programme de la fiche.";
 }
 
-function buildRecommendation(global: number, catalogue: number, missing: number): string {
+function buildRecommendation(
+  nature: TenderNature,
+  global: number,
+  catalogue: number,
+  missing: number,
+): string {
+  if (nature === "HORS_CHAMP") {
+    return "Ce marché ne paraît pas porter sur de la formation. Vérifiez l'objet : s'il s'agit bien d'une prestation de formation, corrigez la fiche et relancez le matching.";
+  }
+  if (nature === "FORMATION_METIER_MANUEL") {
+    return "Formation à un métier manuel étranger au champ de l'ESME. Hors périmètre, sauf décision contraire du responsable appels d'offres.";
+  }
+  if (nature === "FORMATION_REALISABLE") {
+    return "Marché de formation continue professionnelle, dans le périmètre. Aucun programme du catalogue ne le couvre : il faut concevoir l'offre et identifier les intervenants. L'arbitrage porte sur la charge d'ingénierie et la rentabilité, pas sur le périmètre.";
+  }
   if (global >= 75 && catalogue >= 70) {
     return "Forte adéquation pédagogique, sous réserve de vérification des moyens, des références et des exigences administratives.";
   }

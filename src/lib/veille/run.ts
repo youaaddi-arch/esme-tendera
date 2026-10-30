@@ -278,6 +278,7 @@ async function ingestNotice(notice: NormalizedNotice, connector: SourceConnector
       objectSummary: notice.objectSummary ?? null,
       procedure: notice.procedure ?? null,
       cpvCodes: notice.cpvCodes,
+      marketTypes: notice.marketTypes,
       publishedAt: notice.publishedAt ?? null,
       deadlineAt: notice.deadlineAt ?? null,
       contractDuration: notice.contractDuration ?? null,

@@ -43,6 +43,7 @@ export default async function PipelinePage({
       matchResult: {
         select: {
           scoreGlobal: true,
+          nature: true,
           matches: {
             orderBy: { score: "desc" },
             take: 1,
@@ -54,7 +55,27 @@ export default async function PipelinePage({
     },
   });
 
-  const cards: KanbanCard[] = tenders.map((tender) => ({
+  // Une fenêtre de veille de trente jours ramène aussi des avis dont la date
+  // limite est passée. Ils restent consultables, mais ne doivent pas occuper
+  // le haut des colonnes : on classe d'abord ce qui est encore à jouer.
+  const now = new Date();
+  const ordered = [...tenders].sort((a, b) => {
+    const rank = (deadline: Date | null) => {
+      if (!deadline) return 1; // date limite inconnue : au milieu
+      return deadline >= now ? 0 : 2; // ouverte, puis inconnue, puis échue
+    };
+    const rankA = rank(a.deadlineAt);
+    const rankB = rank(b.deadlineAt);
+    if (rankA !== rankB) return rankA - rankB;
+    if (!a.deadlineAt || !b.deadlineAt) return 0;
+    // Les échéances ouvertes : la plus proche d'abord. Les échues : la plus
+    // récente d'abord, car c'est celle qui vient de se fermer.
+    return rankA === 2
+      ? b.deadlineAt.getTime() - a.deadlineAt.getTime()
+      : a.deadlineAt.getTime() - b.deadlineAt.getTime();
+  });
+
+  const cards: KanbanCard[] = ordered.map((tender) => ({
     id: tender.id,
     reference: tender.reference,
     title: tender.title,
@@ -72,6 +93,7 @@ export default async function PipelinePage({
     isDemo: tender.isDemo,
     ownerName: tender.owner?.name ?? null,
     scoreGlobal: tender.matchResult?.scoreGlobal ?? null,
+    nature: tender.matchResult?.nature ?? null,
     domain: tender.matchResult?.matches[0]?.training.domain?.name ?? null,
     lotCount: tender._count.lots,
     documentCount: tender._count.documents,

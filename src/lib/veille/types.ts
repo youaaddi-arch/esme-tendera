@@ -11,6 +11,8 @@ export type NormalizedNotice = {
   objectSummary?: string | null;
   procedure?: string | null;
   cpvCodes: string[];
+  /// Nature du marché : SERVICES, TRAVAUX, FOURNITURES.
+  marketTypes: string[];
   publishedAt?: Date | null;
   deadlineAt?: Date | null;
   executionPlace?: string | null;

@@ -220,6 +220,28 @@ npx tsx scripts/build-catalogue.ts   # data-source/ → src/data/catalogue-esme.
 npm run db:seed
 ```
 
+### Périmètre d'intervention
+
+ESME Executive Education intervient en **formation continue professionnelle
+généraliste, tous secteurs** — un positionnement comparable à celui de Cegos, M2i ou
+ORSYS — avec une appétence marquée pour les sujets d'ingénieur.
+
+Le catalogue ne délimite donc pas le périmètre : il mesure l'**affinité**, c'est-à-dire la
+part du besoin déjà couverte par une offre existante. Chaque consultation reçoit une
+appréciation en clair :
+
+| Appréciation | Ce qu'elle dit |
+|---|---|
+| **Formation — cœur de catalogue** | des programmes existants répondent au besoin |
+| **Formation — proche du catalogue** | une adaptation des programmes existants suffit probablement |
+| **Formation — dans le périmètre** | aucun programme ne couvre ce besoin : il est à concevoir, mais c'est bien notre métier |
+| **Métier manuel — hors périmètre** | apprentissage d'un métier manuel étranger au champ de l'établissement (esthétique, coiffure, métiers de bouche, métiers du bâtiment) |
+| **Ne porte pas sur de la formation** | marché de travaux ou de fournitures, conservé mais signalé |
+
+Un score faible ne vaut jamais rejet : il dit « nous n'avons pas encore de programme sur
+étagère », pas « ce n'est pas pour nous ». Les trois premières appréciations sont toutes
+dans le périmètre.
+
 ### Priorité 2 — formations voisines (10 fiches)
 
 Domaines proches, régulièrement demandés par les acheteurs publics : formation de
@@ -376,13 +398,44 @@ Points appris du jeu de données réel, qui conditionnent le bon fonctionnement 
 - les dates eForms s'écrivent `2026-11-18+01:00`, forme que `new Date()` ne sait pas lire ;
 - les **avis d'attribution** sont écartés : ils annoncent un marché déjà attribué.
 
+### Recherche
+
+Un seul terme : **« formation »**, cherché dans l'objet des avis et dans les descripteurs
+thématiques du BOAMP. Une liste de mots-clés par domaine faisait deux dégâts — elle ratait
+les marchés de formation dont l'intitulé n'emploie aucun de ces mots, et elle ramenait des
+marchés de travaux contenant « innovation » ou « données ».
+
+La fenêtre par défaut est de **30 jours** : un avis publié il y a trois semaines dont la
+date limite tombe dans deux mois est encore à traiter. La déduplication fait que revoir un
+avis ne coûte rien.
+
+Tous les avis récupérés sont visibles sur `/veille`, avec leur appréciation et leur score,
+et filtrables par appréciation. **Rien n'est écarté en silence** : seuls les avis
+d'attribution (marchés déjà attribués) et les enregistrements sans objet ni identifiant
+sont ignorés, et le journal les compte séparément.
+
+Mesure sur 30 jours de BOAMP : 211 avis retenus, 204 affaires créées, dont 168 marchés de
+formation exploitables.
+
 ### Synchronisation
 
 Bouton **« Lancer la veille maintenant »** sur `/veille` : exécute réellement la
 synchronisation et affiche son résultat. Un connecteur injoignable produit un échec motivé,
 jamais une affaire fictive.
 
-Synchronisation quotidienne, à l'heure configurée (7 h Europe/Paris par défaut) :
+**Chaque matin**, la route de synchronisation récupère les avis publiés depuis la dernière
+exécution — ceux de la veille compris — et crée les affaires correspondantes. Deux
+déclencheurs sont fournis dans le dépôt :
+
+- `vercel.json` — cron de l'hébergeur, actif dès le déploiement sur Vercel ;
+- `.github/workflows/veille-quotidienne.yml` — GitHub Actions, pour tout autre hébergeur ;
+  il attend les secrets `TENDERA_URL` et `TENDERA_CRON_SECRET`.
+
+Les deux sont réglés à 06:00 UTC, soit 7 h à Paris en heure d'hiver et 8 h en heure d'été :
+ni Vercel ni GitHub Actions ne gèrent les fuseaux. Pour une heure fixe à Paris, utilisez un
+`cron` système avec `CRON_TZ=Europe/Paris 0 7 * * *`.
+
+Appel direct :
 
 ```bash
 curl -X POST -H "Authorization: Bearer $TENDERA_CRON_SECRET" \

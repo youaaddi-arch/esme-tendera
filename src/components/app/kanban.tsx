@@ -10,7 +10,7 @@ import { Badge, Notice, ScorePill, cx } from "@/components/ui";
 import { moveTenderAction } from "@/app/(app)/pipeline/actions";
 import {
   allowedTransitions, dceStatusLabels, formatAmount, formatDeadline, goNoGoLabels,
-  stageLabels, stageOrder, transitionGuards,
+  natureLabels, natureTone, stageLabels, stageOrder, transitionGuards,
 } from "@/lib/labels";
 
 export type KanbanCard = {
@@ -31,6 +31,7 @@ export type KanbanCard = {
   isDemo: boolean;
   ownerName: string | null;
   scoreGlobal: number | null;
+  nature: string | null;
   domain: string | null;
   lotCount: number;
   documentCount: number;
@@ -254,6 +255,11 @@ function TenderCard({
 
       <div className="mt-2 flex flex-wrap items-center gap-1">
         {card.isDemo ? <Badge tone="warn">Démonstration</Badge> : null}
+        {card.nature ? (
+          <Badge tone={natureTone(card.nature as never)}>
+            {natureLabels[card.nature as never]}
+          </Badge>
+        ) : null}
         {card.domain ? <Badge tone="esme">{card.domain}</Badge> : null}
         {card.goNoGo !== "A_DECIDER" ? (
           <Badge tone={card.goNoGo === "GO" ? "ok" : "danger"}>{goNoGoLabels[card.goNoGo as never]}</Badge>
