@@ -53,11 +53,11 @@ export const connectorRegistry: ConnectorDefinition[] = [
     baseUrl: "https://api.ted.europa.eu/v3",
     description:
       "API de recherche officielle du supplément au Journal officiel de l'Union européenne. Couvre les marchés au-dessus des seuils européens.",
-    status: "A_IMPLEMENTER",
+    status: "OPERATIONNEL",
     requirement:
-      "L'API TED v3 exige une clé d'API nominative (portail des développeurs de l'Office des publications). Fournir la clé dans les paramètres du connecteur pour activer la recherche.",
-    enabledByDefault: false,
-    defaultConfig: { pageSize: 100, lookbackDays: 7 },
+      "Aucune. L'API de recherche v3 répond sans authentification : vérifié par appel direct avant la mise en service. L'entrée précédente annonçait une clé nominative obligatoire, ce qui était inexact.",
+    enabledByDefault: true,
+    defaultConfig: { pageSize: 100, maxPages: 10, lookbackDays: 30, country: "FRA", cpvRoot: "80000000" },
   },
   {
     key: "place",
