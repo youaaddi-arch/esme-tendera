@@ -103,6 +103,38 @@ async function main() {
   });
   const page = await contexte.newPage();
 
+  /**
+   * Les téléchargements sont écoutés sur le navigateur, pas sur la page.
+   *
+   * Un lien de téléchargement ouvre volontiers un onglet, et le fichier
+   * arrive alors sur cette page-là. Attendre l'événement sur la page d'origine
+   * le manque, et l'on conclut à tort qu'aucun fichier n'est venu — ce qui
+   * s'est produit sur cette plateforme, trois clics de suite.
+   */
+  let recu = null;
+  const telechargements = [];
+  contexte.on("download", (d) => {
+    telechargements.push(d);
+    recu = d;
+  });
+  // Un onglet surgissant est accepté mais jamais piloté : on le laisse
+  // seulement délivrer son fichier.
+  contexte.on("page", (p) => {
+    p.on("download", (d) => {
+      telechargements.push(d);
+      recu = d;
+    });
+  });
+
+  const attendreFichier = async (secondes) => {
+    const limite = Date.now() + secondes * 1000;
+    while (Date.now() < limite) {
+      if (recu) return recu;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return null;
+  };
+
   try {
     await page.goto(cible, { waitUntil: "networkidle", timeout: 90_000 });
     console.log(`Page du dossier : ${page.url()}`);
@@ -187,34 +219,62 @@ async function main() {
           console.log(`${coches}/${nombreLots} lot(s) coché(s).`);
         }
 
-        for (const motif of [
+        // Un seul déclenchement, et le plus précis.
+        //
+        // Trois clics enchaînés avaient été tentés par sécurité : le premier
+        // navigue, la page revient avec ses cases vidées, et les suivants
+        // portent sur une sélection vide. « Au cas où » défaisait le travail
+        // du clic utile.
+        const intitules = [
           /t[ée]l[ée]charger\s+les\s+dce\s+s[ée]lectionn[ée]s/i,
           /t[ée]l[ée]charger\s+le\s+dce/i,
           /t[ée]l[ée]charger\s+le\s+dossier/i,
           /t[ée]l[ée]charger/i,
-          /valider/i,
-        ]) {
+        ];
+
+        let declenche = false;
+        for (const motif of intitules) {
           const bouton = page
             .getByRole("button", { name: motif })
             .or(page.getByRole("link", { name: motif }))
             .first();
           if ((await bouton.count()) === 0) continue;
+
+          // On revérifie juste avant : la page a pu se recharger.
+          if (nombreLots > 0) {
+            const coches = await page.locator('input[type="checkbox"][name="lots"]:checked').count();
+            if (coches === 0) {
+              console.log("Les cases se sont vidées : on recoche avant de déclencher.");
+              for (let i = 0; i < nombreLots; i += 1) {
+                await tous.nth(i).check().catch(() => {});
+              }
+            }
+          }
+
           console.log(`Déclenchement, intitulé correspondant à ${motif}`);
-          const suite = page.waitForEvent("download", { timeout: 120_000 }).catch(() => null);
           await bouton.click();
-          telechargement = await suite;
-          if (telechargement) break;
+          declenche = true;
+          break;
         }
 
-        // Dernier recours : le formulaire se soumet par son bouton d'envoi,
-        // qui n'a pas d'intitulé accessible sur cette plateforme.
-        if (!telechargement && nombreLots > 0) {
-          const envoi = page.locator('input[type="submit"], button[type="submit"]').last();
-          if ((await envoi.count()) > 0) {
-            console.log("Soumission du formulaire de sélection des lots.");
-            const suite = page.waitForEvent("download", { timeout: 120_000 }).catch(() => null);
-            await envoi.click();
-            telechargement = await suite;
+        if (!declenche && nombreLots > 0) {
+          console.log("Aucun intitulé reconnu : soumission du formulaire par son bouton d'envoi.");
+          await page.locator('input[type="submit"], button[type="submit"]').last().click();
+          declenche = true;
+        }
+
+        if (declenche) {
+          telechargement = await attendreFichier(150);
+          if (!telechargement) {
+            // Décrire l'état d'arrivée : c'est là que se lira la marche
+            // suivante, s'il y en a une.
+            await page.waitForTimeout(3000);
+            const arrivee = await decrire(page);
+            await writeFile(`${SORTIE}/apres-clic.json`, JSON.stringify(arrivee, null, 2), "utf8");
+            await page.screenshot({ path: `${SORTIE}/apres-clic.png`, fullPage: true });
+            console.log("\nÉtat après le déclenchement :");
+            console.log(JSON.stringify(arrivee, null, 2));
+            console.log(`Pages ouvertes : ${contexte.pages().length}`);
           }
         }
       }
