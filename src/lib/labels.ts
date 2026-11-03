@@ -61,25 +61,31 @@ export const transitionGuards: Partial<Record<PipelineStage, string>> = {
  * Colonnes du Kanban.
  *
  * Une colonne n'est pas forcément une étape, et ne l'est que si elle désigne
- * un travail distinct. « Go » et « No Go » n'existent pas dans le pipeline :
- * ce sont l'étape « Go / No Go » plus la décision déjà enregistrée sur
- * l'affaire. Les éclater à l'affichage évite de dupliquer en base une
- * information qui s'y trouve déjà.
+ * un travail distinct.
  *
- * À l'inverse, trois étapes partagent la première colonne : ce que la veille
- * vient de repérer, ce que le moteur a reconnu comme cœur de catalogue, et ce
- * qui a été explicitement porté à l'arbitrage. Elles posaient trois files à
- * parcourir pour une seule question — répond-on ? — alors que l'appréciation
- * du moteur se retrouve mieux par le filtre, qui laisse choisir ce qu'on
- * regarde. Les étapes subsistent en base : seule la lecture est regroupée.
+ * Trois étapes partagent la première colonne : ce que la veille vient de
+ * repérer, ce que le moteur a reconnu comme cœur de catalogue, et ce qui a été
+ * porté à l'arbitrage. Elles posaient trois files pour une seule question —
+ * répond-on ? « À arbitrer » n'est pas une décision, c'est son absence.
+ *
+ * Il n'y a pas de colonne « Go », et c'est une correction. Elle a existé, et
+ * elle est restée vide : un GO ouvre l'espace de préparation et déplace
+ * aussitôt l'affaire en « Préparation de la réponse », si bien qu'aucune carte
+ * ne pouvait y stationner. Une colonne toujours vide n'informe pas, elle
+ * inquiète. Un GO se lit donc à sa place dans le flux de travail, et à la
+ * pastille « GO » que porte sa carte.
+ *
+ * Le « No Go » en revanche est une vraie colonne, parce qu'il est terminal :
+ * il n'ouvre aucun travail. Il se distingue de « Rejeté / non poursuivi », qui
+ * recueille les abandons sans décision — une affaire lâchée en cours de
+ * rédaction n'est pas un No Go, et les confondre effacerait la différence
+ * entre « nous avons choisi de ne pas répondre » et « nous n'avons pas pu ».
  */
-export type BoardColumnKey = Exclude<PipelineStage, "MATCHING" | "GO_NO_GO"> | "GO" | "NO_GO";
+export type BoardColumnKey = Exclude<PipelineStage, "MATCHING" | "GO_NO_GO"> | "NO_GO";
 
 /** Étape du pipeline réellement visée par un dépôt dans cette colonne. */
 export const boardColumnStage: Record<BoardColumnKey, PipelineStage> = {
   AO_IDENTIFIES: "AO_IDENTIFIES",
-  GO: "GO_NO_GO",
-  NO_GO: "GO_NO_GO",
   PREPARATION: "PREPARATION",
   CONTROLE_QUALITE: "CONTROLE_QUALITE",
   PRET_AU_DEPOT: "PRET_AU_DEPOT",
@@ -87,19 +93,18 @@ export const boardColumnStage: Record<BoardColumnKey, PipelineStage> = {
   NEGOCIATION: "NEGOCIATION",
   ATTENTE_RESULTAT: "ATTENTE_RESULTAT",
   MARCHE_ATTRIBUE: "MARCHE_ATTRIBUE",
+  NO_GO: "REJETE_NON_POURSUIVI",
   REJETE_NON_POURSUIVI: "REJETE_NON_POURSUIVI",
 };
 
 export const boardColumnOrder: BoardColumnKey[] = [
-  "AO_IDENTIFIES", "GO", "NO_GO",
-  "PREPARATION", "CONTROLE_QUALITE", "PRET_AU_DEPOT", "DEPOT_EFFECTUE",
-  "NEGOCIATION", "ATTENTE_RESULTAT", "MARCHE_ATTRIBUE", "REJETE_NON_POURSUIVI",
+  "AO_IDENTIFIES", "PREPARATION", "CONTROLE_QUALITE", "PRET_AU_DEPOT",
+  "DEPOT_EFFECTUE", "NEGOCIATION", "ATTENTE_RESULTAT", "MARCHE_ATTRIBUE",
+  "NO_GO", "REJETE_NON_POURSUIVI",
 ];
 
 export const boardColumnLabels: Record<BoardColumnKey, string> = {
   AO_IDENTIFIES: stageLabels.AO_IDENTIFIES,
-  GO: "Go",
-  NO_GO: "No Go",
   PREPARATION: stageLabels.PREPARATION,
   CONTROLE_QUALITE: stageLabels.CONTROLE_QUALITE,
   PRET_AU_DEPOT: stageLabels.PRET_AU_DEPOT,
@@ -107,33 +112,32 @@ export const boardColumnLabels: Record<BoardColumnKey, string> = {
   NEGOCIATION: stageLabels.NEGOCIATION,
   ATTENTE_RESULTAT: stageLabels.ATTENTE_RESULTAT,
   MARCHE_ATTRIBUE: stageLabels.MARCHE_ATTRIBUE,
-  REJETE_NON_POURSUIVI: stageLabels.REJETE_NON_POURSUIVI,
+  NO_GO: "No Go",
+  REJETE_NON_POURSUIVI: "Abandonnées sans décision",
 };
 
 export const boardColumnHints: Partial<Record<BoardColumnKey, string>> = {
   AO_IDENTIFIES:
     "Tout ce qui n'est pas tranché : repéré par la veille, reconnu cœur de catalogue, ou en attente d'arbitrage. Filtrez par appréciation pour trier.",
-  GO: "Décision prise : nous répondons. Les lots visés figurent sur la décision.",
-  NO_GO: "Décision prise : nous ne répondons pas. Le motif est consigné.",
+  PREPARATION: "Les GO sont ici : décider de répondre ouvre la préparation.",
+  NO_GO: "Décision prise : nous ne répondons pas. Le motif est consigné sur la fiche.",
+  REJETE_NON_POURSUIVI: "Sorties du pipeline sans décision formelle de No Go.",
 };
 
 /**
  * Colonne d'une affaire.
  *
- * Le critère de scission n'est jamais inventé : il vient de la décision
- * enregistrée par un humain. Tant qu'elle n'est pas prise, l'affaire reste
- * dans « AO identifiés », quelle que soit l'étape où elle se trouve.
+ * Le No Go passe devant l'étape, et c'est voulu : il est terminal, et une
+ * décision prise par quelqu'un se lit mieux que l'étape technique où elle a
+ * rangé l'affaire. Tout le reste suit son étape, à ceci près que les étapes
+ * non tranchées se regroupent.
  */
 export function boardColumnOf(card: {
   stage: PipelineStage;
   goNoGo: GoNoGoStatus;
 }): BoardColumnKey {
-  if (card.stage === "GO_NO_GO") {
-    if (card.goNoGo === "GO") return "GO";
-    if (card.goNoGo === "NO_GO") return "NO_GO";
-    return "AO_IDENTIFIES";
-  }
-  if (card.stage === "MATCHING") return "AO_IDENTIFIES";
+  if (card.goNoGo === "NO_GO") return "NO_GO";
+  if (card.stage === "MATCHING" || card.stage === "GO_NO_GO") return "AO_IDENTIFIES";
   return card.stage;
 }
 
