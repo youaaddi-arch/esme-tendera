@@ -24,6 +24,7 @@ import "server-only";
 import { prisma } from "../db";
 import { ingestNotice } from "./ingest";
 import { normalizeBoampRecord } from "./boamp-parse";
+import { identifiantDepuisLien } from "./liens";
 import { normalizeTedNotice, TED_FIELDS, type TedRecord } from "./ted-parse";
 import { persistMatching } from "../matching/persist";
 import type { NormalizedNotice } from "./types";
@@ -317,8 +318,16 @@ export async function repriseSelection(
     throw new Error("Les connecteurs boamp et ted doivent être enregistrés en base.");
   }
 
+  // L'identifiant est déduit du lien quand l'appelant ne l'a pas fourni : une
+  // ligne de tableau se donne telle quelle, lien compris.
+  const resolues = lignes.map((ligne) => {
+    if (ligne.identifiant && ligne.source !== "INCONNU") return ligne;
+    const trouve = identifiantDepuisLien(ligne.lien);
+    return trouve ? { ...ligne, source: trouve.source, identifiant: trouve.identifiant } : ligne;
+  });
+
   // Les avis TED se demandent en une seule requête : inutile d'en faire sept.
-  const numerosTed = lignes
+  const numerosTed = resolues
     .filter((l) => l.source === "TED" && l.identifiant)
     .map((l) => l.identifiant as string);
   const avisTed = await tedParNumeros(numerosTed);
@@ -334,7 +343,7 @@ export async function repriseSelection(
   const trouvailles: { ligne: Ligne; avis: NormalizedNotice; source: "boamp" | "ted"; score: number }[] = [];
   const rapport: RepriseLigne[] = [];
 
-  for (const ligne of lignes) {
+  for (const ligne of resolues) {
     let avis: NormalizedNotice | null = null;
     let source: "boamp" | "ted" | null = null;
     let score = 1;
