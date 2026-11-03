@@ -10,6 +10,7 @@ import { recordAudit, diffFields } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { analyzeTenderDce, ingestDocuments } from "@/lib/dce/ingest";
 import { demanderRetrait, repondreCaptcha } from "@/lib/dce/retrait";
+import { recordDecision } from "@/lib/decisions";
 import { notify } from "@/lib/notifications";
 import { assertCan, PermissionError } from "@/lib/rbac";
 import { recomputeMatching } from "@/lib/matching/service";
@@ -501,115 +502,21 @@ export async function clearOverrideAction(tenderId: string): Promise<ActionState
 export async function recordDecisionAction(tenderId: string, formData: FormData): Promise<ActionState> {
   try {
     return await guard("decision.record", async (session) => {
-      const status = String(formData.get("status") ?? "") as GoNoGoStatus;
-      const rationale = String(formData.get("rationale") ?? "").trim();
-      const reason = String(formData.get("reason") ?? "").trim() as NoGoReason | "";
-      const selectedLotIds = formData.getAll("lots").map(String).filter(Boolean);
-
-      if (!["GO", "NO_GO", "A_DECIDER"].includes(status)) {
-        return { ok: false, message: "Décision invalide." };
-      }
-      if (status === "NO_GO" && !reason) {
-        return { ok: false, message: "Un NO GO doit porter un motif." };
-      }
-      if (!rationale) {
-        return { ok: false, message: "Motivez la décision : elle engage l'équipe et reste au journal." };
-      }
-      // « Autre » ne dit rien à lui seul : c'est précisément le cas où le
-      // texte libre porte toute l'information.
-      if (status === "NO_GO" && reason === "AUTRE" && rationale.length < 15) {
-        return {
-          ok: false,
-          message: "Motif « Autre » : précisez-le en toutes lettres dans la motivation.",
-        };
-      }
-
-      const lots = await prisma.lot.findMany({
-        where: { tenderId },
-        orderBy: { number: "asc" },
-        select: { id: true, number: true, title: true },
-      });
-
-      // Un accord-cadre alloti ne se gagne pas en bloc : se positionner sans
-      // dire sur quoi ne veut rien dire, et c'est le lot qui pilote ensuite le
-      // mémoire technique et le chiffrage.
-      if (status === "GO" && lots.length > 0 && selectedLotIds.length === 0) {
-        return {
-          ok: false,
-          message: `Cette consultation comporte ${lots.length} lot(s) : indiquez celui ou ceux sur lesquels vous vous positionnez.`,
-        };
-      }
-
-      const known = new Set(lots.map((lot) => lot.id));
-      const unknown = selectedLotIds.filter((id) => !known.has(id));
-      if (unknown.length > 0) {
-        return { ok: false, message: "Un lot sélectionné n'appartient pas à cette consultation." };
-      }
-
-      const chosenLots = status === "GO" ? lots.filter((lot) => selectedLotIds.includes(lot.id)) : [];
-
-      await prisma.decision.updateMany({ where: { tenderId, superseded: false }, data: { superseded: true } });
-      await prisma.decision.create({
-        data: {
-          tenderId, status, rationale,
-          reason: status === "NO_GO" ? (reason as NoGoReason) : null,
-          lotIds: chosenLots.map((lot) => lot.id),
-          lotLabels: chosenLots.map((lot) => `Lot ${lot.number} — ${lot.title}`),
-          decidedById: session.id,
-        },
-      });
-
-      // Le GO ouvre l'espace de préparation ; le NO GO classe l'affaire.
-      const stage = status === "GO" ? "PREPARATION" : status === "NO_GO" ? "REJETE_NON_POURSUIVI" : "GO_NO_GO";
-      await prisma.tender.update({ where: { id: tenderId }, data: { goNoGo: status, stage } });
-
-      // Le GO déclenche le retrait du dossier.
-      //
-      // C'est le moment où il devient utile : on ne retire pas les dossiers de
-      // deux cents consultations par précaution, on retire celui du marché
-      // auquel on a décidé de répondre. Et c'est le moment où il devient
-      // urgent, puisque la rédaction commence.
-      //
-      // Le retrait est une demande, pas un appel : il demande un navigateur
-      // maintenu en vie, et parfois quelqu'un pour lire une épreuve
-      // anti-robot. Un échec ne remet donc pas le GO en cause — la décision
-      // est prise, et le dossier s'importe à la main si besoin.
-      let retrait: string | null = null;
-      if (status === "GO") {
-        await buildResponseWorkspace(tenderId, session.id);
-        const issue = await demanderRetrait(tenderId, { userId: session.id });
-        retrait = issue.cree
-          ? " Le retrait du dossier est demandé."
-          : issue.raison
-            ? ` Retrait non demandé : ${issue.raison.toLowerCase()}`
-            : null;
-      }
-
-      await recordAudit({
-        action: "decision.record", entity: "Tender", entityId: tenderId, tenderId,
+      // Les règles de la décision — motif obligatoire, lots d'un accord-cadre
+      // alloti, ouverture de l'espace de réponse, demande de retrait du
+      // dossier — vivent dans `recordDecision`, parce que la reprise d'un tri
+      // fait ailleurs doit obéir aux mêmes.
+      const issue = await recordDecision(tenderId, {
+        status: String(formData.get("status") ?? "") as GoNoGoStatus,
+        rationale: String(formData.get("rationale") ?? ""),
+        reason: (String(formData.get("reason") ?? "").trim() || null) as NoGoReason | null,
+        lotIds: formData.getAll("lots").map(String).filter(Boolean),
         userId: session.id,
-        summary:
-          `Décision ${status}${reason ? ` (${reason})` : ""}` +
-          (chosenLots.length > 0 ? ` — lot(s) ${chosenLots.map((lot) => lot.number).join(", ")}` : "") +
-          ".",
-        payload: {
-          motivation: rationale,
-          lots: chosenLots.map((lot) => `Lot ${lot.number} — ${lot.title}`),
-        },
       });
 
+      if (!issue.ok) return { ok: false, message: issue.message };
       refresh(tenderId);
-      return {
-        ok: true,
-        message:
-          status === "GO"
-            ? (chosenLots.length > 0
-                ? `GO enregistré sur ${chosenLots.length} lot(s). L'espace de préparation de la réponse a été créé.`
-                : "GO enregistré. L'espace de préparation de la réponse a été créé.") + (retrait ?? "")
-            : status === "NO_GO"
-              ? "NO GO enregistré. L'affaire est classée ; elle reste rouvrable."
-              : "Décision remise à « à décider ».",
-      };
+      return { ok: true, message: issue.message };
     });
   } catch (error) {
     return toState(error);

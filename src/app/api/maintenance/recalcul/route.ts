@@ -38,8 +38,33 @@ export async function POST(request: Request) {
   const url = new URL(request.url);
 
   const taille = Math.min(Math.max(Number(url.searchParams.get("taille") ?? 20) || 20, 1), 50);
+  /**
+   * Borne de fraîcheur, et elle doit être fournie.
+   *
+   * Elle valait l'instant de l'appel par défaut, ce qui rendait la boucle
+   * impossible : chaque appel reconsidérait les affaires que le précédent
+   * venait de calculer, puisque leur calcul était antérieur à ce nouvel
+   * instant. Mesuré en production — « 50 traitées, 40 restantes » à chaque
+   * appel, indéfiniment, toujours les cinquante mêmes.
+   *
+   * Le découpage en paquets suppose une borne commune à toute la série. La
+   * route ne peut pas la deviner, puisque chaque appel est indépendant : elle
+   * l'exige donc, et dit laquelle prendre.
+   */
   const depuisParam = url.searchParams.get("depuis");
-  const depuis = depuisParam ? new Date(depuisParam) : new Date();
+  if (!depuisParam) {
+    return NextResponse.json(
+      {
+        erreur:
+          "« depuis » est obligatoire : c'est la borne de fraîcheur, commune à toute la série " +
+          "d'appels. Sans elle, chaque appel reconsidérerait ce que le précédent vient de calculer " +
+          "et la boucle n'avancerait pas.",
+        aPrendre: new Date().toISOString(),
+      },
+      { status: 400 },
+    );
+  }
+  const depuis = new Date(depuisParam);
   if (Number.isNaN(depuis.getTime())) {
     return NextResponse.json({ erreur: "Paramètre « depuis » illisible." }, { status: 400 });
   }
