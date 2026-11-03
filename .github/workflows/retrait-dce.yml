@@ -26,6 +26,10 @@ on:
         description: "Adresse de la consultation menant à l'authentification (la page DCE n'a pas de formulaire)"
         required: false
         type: string
+      explorer:
+        description: "Pages de l'application à décrire après connexion, séparées par des virgules"
+        required: false
+        type: string
       mode:
         description: "diagnostic : ouvre la session et décrit la page, sans rien télécharger"
         required: false
@@ -57,7 +61,8 @@ jobs:
             exit 1
           fi
           if [ -n "${{ inputs.auth }}" ]; then
-            node scripts/retrait-dce.mjs --url "${{ inputs.url }}" --auth "${{ inputs.auth }}" --mode "${{ inputs.mode }}"
+            node scripts/retrait-dce.mjs --url "${{ inputs.url }}" --auth "${{ inputs.auth }}" \
+              --explorer "${{ inputs.explorer }}" --mode "${{ inputs.mode }}"
           else
             node scripts/retrait-dce.mjs --url "${{ inputs.url }}" --mode "${{ inputs.mode }}"
           fi

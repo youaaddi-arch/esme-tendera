@@ -253,6 +253,11 @@ async function main() {
   const cible = argument("url");
   const authUrl = argument("auth");
   const mode = argument("mode", "retrait");
+  // Pages de l'application à décrire après connexion, séparées par des
+  // virgules. Sert à trouver où le retrait identifié est logé : la page
+  // publiée par l'avis est sur un autre domaine que la session, et ne mène
+  // qu'à la voie anonyme.
+  const explorer = (argument("explorer", "") ?? "").split(",").map((u) => u.trim()).filter(Boolean);
   const login = process.env.AWS_LOGIN;
   const motDePasse = process.env.AWS_PASSWORD;
 
@@ -291,6 +296,17 @@ async function main() {
       const arrivee = await decrire(page);
       await page.screenshot({ path: `${SORTIE}/apres-connexion.png`, fullPage: true });
       await writeFile(`${SORTIE}/apres-connexion.json`, JSON.stringify(arrivee, null, 2), "utf8");
+
+      for (const [index, adresse] of explorer.entries()) {
+        console.log(`\nExploration ${index + 1} : ${adresse}`);
+        await page.goto(adresse, { waitUntil: "networkidle", timeout: 90_000 }).catch((erreur) => {
+          console.error(`  injoignable : ${erreur.message}`);
+        });
+        const vue = await decrire(page);
+        console.log(JSON.stringify(vue, null, 2));
+        await page.screenshot({ path: `${SORTIE}/exploration-${index + 1}.png`, fullPage: true });
+        await writeFile(`${SORTIE}/exploration-${index + 1}.json`, JSON.stringify(vue, null, 2), "utf8");
+      }
     } else {
       console.log("Aucun --auth : on tente la page du dossier telle quelle.");
     }
