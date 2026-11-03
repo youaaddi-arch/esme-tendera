@@ -16,6 +16,25 @@ export const tenderDetailInclude = {
   analysis: true,
   requirements: { orderBy: [{ level: "asc" }, { createdAt: "asc" }] },
   documents: { orderBy: { uploadedAt: "asc" } },
+  /**
+   * Le dernier retrait de dossier, quel que soit son état.
+   *
+   * Un seul, et sans filtre sur l'état : filtrer sur « en cours » ferait
+   * disparaître un échec dès qu'il est constaté, alors que c'est précisément
+   * ce qu'il faut montrer — avec sa raison et de quoi relancer.
+   *
+   * Les champs sont choisis un à un : le journal d'un retrait peut peser
+   * quelques dizaines de kilo-octets, et il n'a rien à faire dans le
+   * chargement d'une fiche.
+   */
+  retraits: {
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: {
+      id: true, etat: true, captchaImage: true, captchaDemandeAt: true,
+      tentatives: true, echec: true, fichier: true, createdAt: true,
+    },
+  },
   matchResult: {
     include: {
       matches: {
