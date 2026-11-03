@@ -20,9 +20,20 @@
  *  - il s'arrête devant toute protection — épreuve anti-robot, second facteur.
  *    Les contourner serait franchir la ligne.
  *
- * Parcours observé : l'adresse « type=DCE » de l'avis BOAMP redirige vers une
- * authentification Keycloak (formulaire HTML classique : username, password),
- * puis vers la page de la consultation, « /apr/depot-from-reference/MPI-… ».
+ * Parcours observé sur AW Solutions : la page « dematEnt.login&type=DCE » offre
+ * deux routes vers le même dossier. Un téléchargement anonyme, protégé par une
+ * épreuve anti-robot — celle de l'arrêté du 14/12/2009, qui n'oblige à rien de
+ * plus que de laisser une trace. Et une connexion au compte opérateur
+ * économique, qui donne le dossier sans épreuve et, surtout, inscrit
+ * l'établissement sur la liste des retraits : c'est ce qui déclenche l'envoi
+ * des rectificatifs. C'est la seconde qu'on prend, et c'est pour cela que le
+ * compte existe.
+ *
+ * La distinction compte pour l'ordre des opérations : la page affiche les deux
+ * routes à la fois, donc l'épreuve anti-robot y est visible alors même qu'on
+ * ne la rencontrera pas. On s'authentifie d'abord, et on ne juge qu'ensuite
+ * s'il reste un obstacle sur notre chemin. Une épreuve qui survit à
+ * l'authentification, elle, est un vrai mur : on s'arrête.
  *
  *     node scripts/retrait-dce.mjs --url "<adresse DCE de l'avis>"
  *     node scripts/retrait-dce.mjs --url "…" --mode diagnostic
@@ -59,6 +70,40 @@ async function protectionDetectee(page) {
   const contenu = await page.content();
   const trouve = PROTECTIONS.find((motif) => motif.test(contenu));
   return trouve ? trouve.source : null;
+}
+
+/**
+ * Reconnaît le parcours de dépôt d'une offre, pour en sortir aussitôt.
+ *
+ * Sur AW Solutions, l'adresse de la consultation et celle du dépôt se
+ * ressemblent, et l'une redirige vers l'autre une fois connecté : on arrive
+ * sur un assistant « CGU → Lots → Documents → Récapitulatif » qui est la
+ * remise des plis. Un script qui y cliquerait « Suivant » engagerait
+ * l'établissement.
+ *
+ * Déposer une offre est un acte humain, qui suppose des pièces relues et une
+ * décision prise. Ce script ne doit jamais s'en approcher, même par accident,
+ * et surtout pas parce qu'aucun bouton de téléchargement n'a été trouvé.
+ */
+async function parcoursDeDepot(page) {
+  // Deux signes, et seulement ceux-là : l'adresse du dépôt, et l'assistant au
+  // complet.
+  //
+  // La tentation serait de guetter des mots. Elle est mauvaise : « remise des
+  // plis » figure sur toutes les pages de consultation, dans « date limite de
+  // remise des plis », et un lien « déposer un pli » peut très bien voisiner
+  // avec le retrait du dossier sans qu'on soit engagé dans quoi que ce soit.
+  // Un garde-fou qui se déclenche à tort est un garde-fou qu'on finit par
+  // retirer. Ce qui compte n'est pas ce que la page propose, c'est où l'on est.
+  const url = page.url();
+  if (/\/apr\/depot\//i.test(url)) return `adresse de dépôt (${url})`;
+
+  const contenu = await page.content();
+  const etapes = [/\bCGU\b/i, /\bLots\b/i, /\bDocuments\b/i, /r[ée]capitulatif/i];
+  if (etapes.every((motif) => motif.test(contenu))) {
+    return "assistant de dépôt (CGU, Lots, Documents, Récapitulatif)";
+  }
+  return null;
 }
 
 /** Décrit la structure d'une page, sans en recopier le contenu. */
@@ -120,15 +165,12 @@ async function main() {
     console.log(`Ouverture de la consultation : ${cible}`);
     await page.goto(cible, { waitUntil: "networkidle", timeout: 90_000 });
 
-    let protection = await protectionDetectee(page);
-    if (protection) {
-      console.error(`Protection détectée (${protection}). Arrêt volontaire : le retrait reste manuel.`);
-      await page.screenshot({ path: `${SORTIE}/protection.png`, fullPage: true });
-      process.exitCode = 2;
-      return;
-    }
-
-    // Authentification Keycloak : formulaire HTML classique.
+    // On ne juge pas les protections avant d'avoir pris notre route.
+    //
+    // La page du DCE présente les deux accès côte à côte : l'épreuve
+    // anti-robot du téléchargement anonyme y est donc dans le HTML même quand
+    // on ne la rencontrera jamais. Abandonner ici, c'était renoncer à la porte
+    // qui nous est ouverte parce que l'autre est fermée.
     const champMotDePasse = page.locator('input[type="password"]').first();
     if ((await champMotDePasse.count()) > 0) {
       console.log("Page d'authentification détectée, connexion…");
@@ -143,9 +185,13 @@ async function main() {
       console.log("Pas de formulaire d'authentification : session déjà ouverte, ou page inattendue.");
     }
 
-    protection = await protectionDetectee(page);
+    // Maintenant le jugement a un sens : ce qui reste est sur notre chemin.
+    const protection = await protectionDetectee(page);
     if (protection) {
-      console.error(`Protection après envoi (${protection}). Arrêt volontaire.`);
+      console.error(
+        `Protection après authentification (${protection}). Arrêt volontaire : une épreuve qui ` +
+          "survit à la connexion est un vrai mur, et la franchir n'est pas de notre ressort.",
+      );
       await page.screenshot({ path: `${SORTIE}/protection.png`, fullPage: true });
       process.exitCode = 2;
       return;
@@ -164,6 +210,19 @@ async function main() {
     }
 
     console.log(`Connecté. Page courante : ${page.url()}`);
+
+    const depot = await parcoursDeDepot(page);
+    if (depot) {
+      console.error(
+        `Parcours de dépôt détecté (${depot}). Arrêt immédiat : ce script retire des dossiers, ` +
+          "il ne dépose jamais d'offre. Déposer suppose des pièces relues et une décision prise — " +
+          "cela ne s'automatise pas.",
+      );
+      await page.screenshot({ path: `${SORTIE}/parcours-de-depot.png`, fullPage: true });
+      process.exitCode = 7;
+      return;
+    }
+
     const vue = await decrire(page);
     await page.screenshot({ path: `${SORTIE}/consultation.png`, fullPage: true });
     await writeFile(`${SORTIE}/consultation.json`, JSON.stringify(vue, null, 2), "utf8");
