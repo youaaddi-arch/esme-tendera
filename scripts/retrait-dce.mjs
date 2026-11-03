@@ -196,6 +196,59 @@ async function authentifier(page, url, login, motDePasse) {
   return { ok: true };
 }
 
+/**
+ * Suit le lien du retrait identifié, et seulement celui-là.
+ *
+ * Une fois la session ouverte, la page du dossier propose les deux routes côte
+ * à côte, et les nomme :
+ *
+ *   « retirer le DCE en mode anonyme »  → index.cfm?fuseaction=dce.avertissement
+ *   « le bordereau de retrait »         → https://awsolutions.fr/apr/inscription
+ *
+ * La seconde est celle du compte : s'inscrire au retrait, c'est entrer sur la
+ * liste des retraits de la consultation, et c'est cette inscription qui
+ * déclenche l'envoi des avis rectificatifs. La première ne laisse qu'une trace
+ * anonyme et passe par l'épreuve anti-robot.
+ *
+ * La route anonyme est donc explicitement exclue, par son adresse et par son
+ * intitulé. Non pas parce qu'on ne saurait pas la prendre, mais parce que la
+ * prendre reviendrait à se présenter en inconnu avec les clés en poche, et à
+ * perdre les rectificatifs sur un marché qui se clôt dans un mois.
+ */
+const ANONYME = [/dce\.avertissement/i, /anonyme/i];
+
+const RETRAIT_IDENTIFIE = [
+  /bordereau\s+de\s+retrait/i,
+  /^\s*retrait\s*$/i,
+  /s'inscrire\s+au\s+retrait/i,
+  /r[ée]obtenir/i,
+];
+
+async function suivreRetraitIdentifie(page) {
+  const liens = await page.evaluate(() =>
+    [...document.querySelectorAll("a, button")].map((el) => ({
+      texte: (el.innerText || el.value || "").trim(),
+      href: el.getAttribute("href"),
+    })),
+  );
+
+  for (const motif of RETRAIT_IDENTIFIE) {
+    const lien = liens.find(
+      (l) =>
+        motif.test(l.texte) &&
+        l.href &&
+        !ANONYME.some((exclu) => exclu.test(l.href) || exclu.test(l.texte)),
+    );
+    if (!lien) continue;
+
+    const adresse = new URL(lien.href, page.url()).toString();
+    console.log(`Retrait identifié : « ${lien.texte} » → ${adresse}`);
+    await page.goto(adresse, { waitUntil: "networkidle", timeout: 90_000 });
+    return adresse;
+  }
+  return null;
+}
+
 async function main() {
   const cible = argument("url");
   const authUrl = argument("auth");
@@ -261,6 +314,30 @@ async function main() {
     await page.screenshot({ path: `${SORTIE}/consultation.png`, fullPage: true });
     await writeFile(`${SORTIE}/consultation.json`, JSON.stringify(vue, null, 2), "utf8");
     console.log(JSON.stringify(vue, null, 2));
+
+    // La page du dossier n'est qu'un carrefour : le retrait identifié est une
+    // page de l'application, pas un bouton de celle-ci.
+    const suivi = await suivreRetraitIdentifie(page);
+    if (suivi) {
+      const depotApres = await parcoursDeDepot(page);
+      if (depotApres) {
+        console.error(
+          `Le lien de retrait mène au parcours de dépôt (${depotApres}). Arrêt immédiat : ` +
+            "ce script retire des dossiers, il ne dépose jamais d'offre.",
+        );
+        await page.screenshot({ path: `${SORTIE}/parcours-de-depot.png`, fullPage: true });
+        process.exitCode = 7;
+        return;
+      }
+      const vueRetrait = await decrire(page);
+      await page.screenshot({ path: `${SORTIE}/retrait.png`, fullPage: true });
+      await writeFile(`${SORTIE}/retrait.json`, JSON.stringify(vueRetrait, null, 2), "utf8");
+      console.log(JSON.stringify(vueRetrait, null, 2));
+    } else {
+      console.log(
+        "Aucun lien de retrait identifié sur cette page. Les intitulés figurent dans consultation.json.",
+      );
+    }
 
     const protection = await protectionDetectee(page);
 
