@@ -84,7 +84,7 @@ function lotsVises(
   return { retenus, detail };
 }
 
-type Corps = { lignes?: unknown; motifNoGo?: unknown; simuler?: unknown };
+type Corps = { lignes?: unknown; motifNoGo?: unknown; simuler?: unknown; goSansLots?: unknown };
 
 export async function POST(request: Request) {
   const autorisation = await autoriserMaintenance(request);
@@ -115,6 +115,9 @@ export async function POST(request: Request) {
 
   const motifNoGo = (typeof corps?.motifNoGo === "string" ? corps.motifNoGo : "") as NoGoReason | "";
   const simuler = corps?.simuler !== false;
+  // Dérogation demandée explicitement : poser le GO même quand les lots de
+  // l'avis n'ont pas d'intitulé permettant de les rapprocher du tableau.
+  const goSansLots = corps?.goSansLots === true;
 
   const lignes: LigneTriage[] = brutes.map((brute) => {
     const l = (brute ?? {}) as Record<string, unknown>;
@@ -221,7 +224,9 @@ export async function POST(request: Request) {
       const vises = lotsVises(ligne.lots ?? "", cible.lots);
       lotIds = vises.retenus;
       detailLots = vises.detail;
-      if (lotIds.length === 0) {
+      if (lotIds.length === 0 && goSansLots) {
+        detailLots = [`sans lot désigné (${cible.lots.length} lot(s) à préciser)`];
+      } else if (lotIds.length === 0) {
         rapport.push({
           acheteur: ligne.acheteur,
           decision: ligne.decision,
@@ -269,6 +274,7 @@ export async function POST(request: Request) {
       rationale: motivation,
       reason: estGo ? null : (motifNoGo as NoGoReason),
       lotIds,
+      sansLots: goSansLots,
       userId: par.userId,
     });
 
