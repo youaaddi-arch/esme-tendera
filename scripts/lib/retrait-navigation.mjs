@@ -16,8 +16,23 @@
  * choses : poser l'image, lire la réponse, verser le fichier, conclure.
  */
 
-/** Indices d'une protection qu'on ne doit pas tenter de franchir seul. */
-const PROTECTIONS_DURES = [
+/**
+ * Protections qu'on ne sait pas relayer à une personne.
+ *
+ * La distinction qui compte n'est pas « protégé ou non », c'est « relayable ou
+ * non ». Une épreuve qui tient dans une image se transmet : quelqu'un la lit,
+ * écrit six caractères, et le dispositif obtient exactement ce qu'il demande
+ * — un humain. Un widget qui exige de cliquer dans un navigateur vivant, lui,
+ * ne se transmet pas : le relayer reviendrait à le résoudre à la place de la
+ * personne, ce que nous ne faisons pas.
+ *
+ * Ces motifs ne sont donc cherchés qu'**après** avoir constaté l'absence
+ * d'épreuve relayable. L'ordre inverse a été écrit puis corrigé par un essai
+ * réel : la page d'AW Solutions mentionne « hcaptcha » dans son code tout en
+ * opposant une simple image, et le retrait s'arrêtait sur un mot au lieu de
+ * regarder ce qui était réellement demandé.
+ */
+const PROTECTIONS_NON_RELAYABLES = [
   /recaptcha/i,
   /hcaptcha/i,
   /turnstile/i,
@@ -25,6 +40,15 @@ const PROTECTIONS_DURES = [
   /authentification\s*à\s*deux\s*facteurs/i,
   /code\s*de\s*v[ée]rification/i,
 ];
+
+/** L'épreuve que l'on sait transmettre : une image et un champ de texte. */
+async function epreuveRelayable(page) {
+  const image = page.locator('img[alt*="aptcha" i], img[src*="captcha" i]').first();
+  if ((await image.count()) === 0) return null;
+  const champ = page.locator('input[name="captchaVal"], #texteCaptcha, input[name*="captcha" i]').first();
+  if ((await champ.count()) === 0) return null;
+  return { image, champ };
+}
 
 /**
  * Reconnaît le parcours de dépôt d'une offre, pour en sortir aussitôt.
@@ -136,23 +160,25 @@ export async function retirerDossier({ contexte, url, canal, epreuvesMax = 3 }) 
     dire(`Retrait : ${page.url()}`);
   }
 
-  const contenu = await page.content();
-  const dure = PROTECTIONS_DURES.find((motif) => motif.test(contenu));
-  if (dure) {
-    return {
-      ok: false,
-      echec:
-        `Protection que nous ne franchissons pas (${dure.source}). ` +
-        "Le dossier doit être retiré à la main depuis la plateforme.",
-    };
+  // On regarde d'abord ce qui est demandé, et seulement ensuite ce que la page
+  // mentionne : une épreuve relayable passe devant un mot dans le code.
+  let relayable = await epreuveRelayable(page);
+  if (!relayable) {
+    const contenu = await page.content();
+    const dure = PROTECTIONS_NON_RELAYABLES.find((motif) => motif.test(contenu));
+    if (dure) {
+      return {
+        ok: false,
+        echec:
+          `Protection que nous ne savons pas relayer (${dure.source}). ` +
+          "Le dossier doit être retiré à la main depuis la plateforme.",
+      };
+    }
   }
 
-  for (let epreuve = 1; epreuve <= epreuvesMax; epreuve += 1) {
-    const image = page.locator('img[alt*="aptcha" i], img[src*="captcha" i]').first();
-    if ((await image.count()) === 0) break;
-
+  for (let epreuve = 1; epreuve <= epreuvesMax && relayable; epreuve += 1) {
     // L'image seule, pas la page : c'est ce qu'on donne à lire.
-    const binaire = await image.screenshot();
+    const binaire = await relayable.image.screenshot();
     dire(`Épreuve ${epreuve} : image transmise, en attente d'une saisie humaine.`);
     const pose = await canal.poserCaptcha(`data:image/png;base64,${binaire.toString("base64")}`);
     if (!pose.ok) return { ok: false, echec: pose.raison ?? "Image refusée par la plateforme." };
@@ -162,15 +188,15 @@ export async function retirerDossier({ contexte, url, canal, epreuvesMax = 3 }) 
       return { ok: false, echec: "Aucune saisie dans le délai : retrait abandonné." };
     }
 
-    await page.locator('input[name="captchaVal"], #texteCaptcha').first().fill(reponse);
+    await relayable.champ.fill(reponse);
     await Promise.all([
       page.waitForNavigation({ waitUntil: "networkidle", timeout: 60_000 }).catch(() => {}),
       page.locator('input[type="submit"], button[type="submit"]').first().click(),
     ]);
     await page.waitForTimeout(2500);
 
-    const encore = page.locator('img[alt*="aptcha" i], img[src*="captcha" i]').first();
-    if ((await encore.count()) === 0) break;
+    relayable = await epreuveRelayable(page);
+    if (!relayable) break;
     if (epreuve === epreuvesMax) {
       return { ok: false, echec: `Saisie refusée ${epreuvesMax} fois de suite.` };
     }

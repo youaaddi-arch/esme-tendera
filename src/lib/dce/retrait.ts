@@ -163,8 +163,22 @@ export async function poserCaptcha(
     select: { etat: true, tenderId: true, tentatives: true, tender: { select: { reference: true, title: true } } },
   });
   if (!demande) return { ok: false, raison: "Demande inconnue." };
-  if (demande.etat !== "EN_COURS") {
-    return { ok: false, raison: `La demande n'est pas en cours (${demande.etat}).` };
+  // Deux états acceptent une image : l'ouvrier vient de prendre la demande, ou
+  // il en est à son deuxième essai parce que la saisie précédente a été
+  // refusée par la plateforme.
+  //
+  // N'accepter que « en cours » interdisait le second essai, puisque la
+  // première image fait justement passer en « attente de saisie ». La règle
+  // des trois tentatives existait, et rien ne pouvait l'atteindre — défaut
+  // trouvé en éprouvant la boucle avec une réponse volontairement fausse.
+  if (demande.etat !== "EN_COURS" && demande.etat !== "ATTENTE_CAPTCHA") {
+    return {
+      ok: false,
+      raison:
+        demande.etat === "ABANDONNE"
+          ? "La demande a été abandonnée : le délai de saisie était dépassé."
+          : `La demande n'est pas en cours (${demande.etat}).`,
+    };
   }
 
   await db.dceRetrait.update({
