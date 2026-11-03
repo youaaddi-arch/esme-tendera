@@ -198,7 +198,7 @@ async function tedParNumeros(numeros: string[]): Promise<NormalizedNotice[]> {
  * pas. L'ambiguïté qui reste, les jours de 1 à 12, est levée par le reste de
  * la comparaison.
  */
-function limitesPlausibles(brut: string): string[] {
+export function limitesPlausibles(brut: string): string[] {
   const m = brut.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (!m) return [];
   const [a, b, annee] = [Number(m[1]), Number(m[2]), m[3]];
@@ -229,7 +229,22 @@ function limitesPlausibles(brut: string): string[] {
  * même jour. Quand le tableau donne une date limite et que l'avis en publie
  * une, l'égalité au jour près est donc exigée.
  */
-function proximite(ligne: Ligne, avis: NormalizedNotice): number {
+/**
+ * Ce qu'il faut pour être comparé à une ligne de tableau.
+ *
+ * Un avis normalisé le porte, et une affaire en base aussi. La comparaison
+ * sert dans les deux sens : retrouver l'avis d'une ligne, et vérifier qu'une
+ * affaire qu'on s'apprête à archiver ne correspond pas à une ligne qu'on
+ * croyait absente.
+ */
+export type Rapprochable = {
+  buyer: string;
+  title: string;
+  objectSummary?: string | null;
+  deadlineAt?: Date | null;
+};
+
+export function proximite(ligne: Ligne, avis: Rapprochable): number {
   const attendues = limitesPlausibles(ligne.limite);
   const limiteAvis = avis.deadlineAt?.toISOString().slice(0, 10) ?? null;
   if (attendues.length > 0 && limiteAvis && !attendues.includes(limiteAvis)) return 0;
@@ -260,7 +275,7 @@ function proximite(ligne: Ligne, avis: NormalizedNotice): number {
 }
 
 /** Au-dessus de ce seuil, l'avis retrouvé est tenu pour être la bonne ligne. */
-const SEUIL_CERTITUDE = 0.55;
+export const SEUIL_CERTITUDE = 0.55;
 
 export type RepriseLigne = {
   acheteur: string;

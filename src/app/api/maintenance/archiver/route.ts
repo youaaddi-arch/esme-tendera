@@ -4,6 +4,7 @@ import { autoriserMaintenance } from "@/lib/maintenance-auth";
 
 import { prisma } from "@/lib/db";
 import { recordAudit } from "@/lib/audit";
+import { proximite, SEUIL_CERTITUDE, type Ligne } from "@/lib/veille/reprise";
 
 export const maxDuration = 60;
 
@@ -25,9 +26,23 @@ export const maxDuration = 60;
  * disparaître du pipeline sur la foi d'une liste serait le genre d'erreur
  * qu'on ne remarque que trop tard.
  *
+ * Un second garde-fou existe, et il répond à une inquiétude précise : la liste
+ * des références à sortir a été obtenue en creux, comme le complément de ce
+ * qui figure au tableau. Si une affaire n'a pas été rapprochée de sa ligne —
+ * un libellé d'acheteur qui diffère suffit — elle se retrouve dans la liste
+ * alors qu'elle était bel et bien retenue. C'est l'erreur la plus facile à
+ * commettre ici, et la plus difficile à voir après coup.
+ *
+ * On peut donc joindre les lignes du tableau en « epargner ». Toute affaire
+ * qui correspond à l'une d'elles est alors laissée en place, même si sa
+ * référence figure dans la liste à archiver, et le rapport dit laquelle et
+ * pourquoi. Le rapprochement est celui de la reprise, date limite
+ * éliminatoire comprise.
+ *
  *     POST /api/maintenance/archiver
  *     { "references": ["AO-2026-0012", …], "motif": "hors sélection du 03/11" }
  *     { "references": [...], "simuler": true }   → ne change rien
+ *     { "references": [...], "epargner": [ {acheteur, objet, limite}, … ] }
  */
 
 /** Étapes où rien n'est engagé : seules celles-là sont archivables. */
@@ -42,6 +57,7 @@ type Corps = {
   references?: unknown;
   motif?: unknown;
   simuler?: unknown;
+  epargner?: unknown;
 };
 
 export async function POST(request: Request) {
@@ -68,8 +84,42 @@ export async function POST(request: Request) {
 
   const trouvees = await prisma.tender.findMany({
     where: { reference: { in: references } },
-    select: { id: true, reference: true, stage: true, archived: true },
+    select: {
+      id: true, reference: true, stage: true, archived: true,
+      buyer: true, title: true, objectSummary: true, deadlineAt: true,
+    },
   });
+
+  // Lignes du tableau à épargner : une affaire qui correspond à l'une d'elles
+  // était retenue, et sa présence dans la liste signale un rapprochement
+  // manqué, pas une consultation écartée.
+  const lignes: Ligne[] = (Array.isArray(corps?.epargner) ? corps.epargner : []).map((brute) => {
+    const l = (brute ?? {}) as Record<string, unknown>;
+    const texte = (cle: string) => (typeof l[cle] === "string" ? (l[cle] as string) : "");
+    return {
+      acheteur: texte("acheteur"), objet: texte("objet"), decision: texte("decision"),
+      limite: texte("limite"), remarques: texte("remarques"), lien: texte("lien"),
+      identifiant: null, source: "INCONNU",
+    };
+  });
+
+  const epargnees: { reference: string; ligne: string; proximite: number }[] = [];
+  const correspondUneLigne = (tender: (typeof trouvees)[number]) => {
+    let meilleure: { ligne: Ligne; score: number } | null = null;
+    for (const ligne of lignes) {
+      const score = proximite(ligne, tender);
+      if (!meilleure || score > meilleure.score) meilleure = { ligne, score };
+    }
+    if (meilleure && meilleure.score >= SEUIL_CERTITUDE) {
+      epargnees.push({
+        reference: tender.reference,
+        ligne: `${meilleure.ligne.acheteur} — ${meilleure.ligne.objet}`.slice(0, 160),
+        proximite: Math.round(meilleure.score * 100),
+      });
+      return true;
+    }
+    return false;
+  };
 
   const connues = new Set(trouvees.map((t) => t.reference));
   const inconnues = references.filter((r) => !connues.has(r));
@@ -79,7 +129,7 @@ export async function POST(request: Request) {
     .filter((t) => !t.archived && !ETAPES_SANS_ENGAGEMENT.includes(t.stage as never))
     .map((t) => ({ reference: t.reference, etape: t.stage }));
   const aArchiver = trouvees.filter(
-    (t) => !t.archived && ETAPES_SANS_ENGAGEMENT.includes(t.stage as never),
+    (t) => !t.archived && ETAPES_SANS_ENGAGEMENT.includes(t.stage as never) && !correspondUneLigne(t),
   );
 
   if (simuler) {
@@ -89,6 +139,7 @@ export async function POST(request: Request) {
       archivables: aArchiver.length,
       dejaArchivees: dejaArchivees.length,
       epargneesCarEngagees: engagees,
+      epargneesCarAuTableau: epargnees,
       referencesInconnues: inconnues.slice(0, 20),
       nombreInconnues: inconnues.length,
     });
@@ -119,6 +170,7 @@ export async function POST(request: Request) {
     archivees: aArchiver.length,
     dejaArchivees: dejaArchivees.length,
     epargneesCarEngagees: engagees,
+    epargneesCarAuTableau: epargnees,
     nombreInconnues: inconnues.length,
     referencesInconnues: inconnues.slice(0, 20),
   });
