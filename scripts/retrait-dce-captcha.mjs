@@ -165,7 +165,30 @@ async function main() {
           continue;
         }
 
+        // Le dossier se télécharge lot par lot : sans sélection, le bouton
+        // ne produit rien. On prend tous les lots — on retire le dossier
+        // pour le lire, et on ne sait pas encore sur lesquels on répondra.
+        const tous = page.locator('input[type="checkbox"][name="lots"]');
+        const nombreLots = await tous.count();
+        if (nombreLots > 0) {
+          const global = page.getByLabel(/s[ée]lectionner\s+tous\s+les\s+lots/i).first();
+          if ((await global.count()) > 0) {
+            await global.check().catch(() => {});
+          }
+          for (let i = 0; i < nombreLots; i += 1) {
+            const lot = tous.nth(i);
+            if (!(await lot.isChecked().catch(() => true))) {
+              await lot.check().catch(() => {});
+            }
+          }
+          const coches = await page
+            .locator('input[type="checkbox"][name="lots"]:checked')
+            .count();
+          console.log(`${coches}/${nombreLots} lot(s) coché(s).`);
+        }
+
         for (const motif of [
+          /t[ée]l[ée]charger\s+les\s+dce\s+s[ée]lectionn[ée]s/i,
           /t[ée]l[ée]charger\s+le\s+dce/i,
           /t[ée]l[ée]charger\s+le\s+dossier/i,
           /t[ée]l[ée]charger/i,
@@ -176,11 +199,23 @@ async function main() {
             .or(page.getByRole("link", { name: motif }))
             .first();
           if ((await bouton.count()) === 0) continue;
-          console.log(`Déclenchement : « ${(await bouton.innerText()).trim()} »`);
+          console.log(`Déclenchement, intitulé correspondant à ${motif}`);
           const suite = page.waitForEvent("download", { timeout: 120_000 }).catch(() => null);
           await bouton.click();
           telechargement = await suite;
           if (telechargement) break;
+        }
+
+        // Dernier recours : le formulaire se soumet par son bouton d'envoi,
+        // qui n'a pas d'intitulé accessible sur cette plateforme.
+        if (!telechargement && nombreLots > 0) {
+          const envoi = page.locator('input[type="submit"], button[type="submit"]').last();
+          if ((await envoi.count()) > 0) {
+            console.log("Soumission du formulaire de sélection des lots.");
+            const suite = page.waitForEvent("download", { timeout: 120_000 }).catch(() => null);
+            await envoi.click();
+            telechargement = await suite;
+          }
         }
       }
 
