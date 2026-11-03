@@ -22,6 +22,10 @@ on:
         description: "Adresse de retrait du DCE, telle que l'avis BOAMP la publie"
         required: true
         type: string
+      auth:
+        description: "Adresse de la consultation menant à l'authentification (la page DCE n'a pas de formulaire)"
+        required: false
+        type: string
       mode:
         description: "diagnostic : ouvre la session et décrit la page, sans rien télécharger"
         required: false
@@ -52,7 +56,11 @@ jobs:
             echo "Secrets AWS_LOGIN et AWS_PASSWORD absents du dépôt." >&2
             exit 1
           fi
-          node scripts/retrait-dce.mjs --url "${{ inputs.url }}" --mode "${{ inputs.mode }}"
+          if [ -n "${{ inputs.auth }}" ]; then
+            node scripts/retrait-dce.mjs --url "${{ inputs.url }}" --auth "${{ inputs.auth }}" --mode "${{ inputs.mode }}"
+          else
+            node scripts/retrait-dce.mjs --url "${{ inputs.url }}" --mode "${{ inputs.mode }}"
+          fi
 
       - name: Conserver le dossier et les traces
         if: always()

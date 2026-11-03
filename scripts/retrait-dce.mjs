@@ -20,23 +20,34 @@
  *  - il s'arrête devant toute protection — épreuve anti-robot, second facteur.
  *    Les contourner serait franchir la ligne.
  *
- * Parcours observé sur AW Solutions : la page « dematEnt.login&type=DCE » offre
- * deux routes vers le même dossier. Un téléchargement anonyme, protégé par une
- * épreuve anti-robot — celle de l'arrêté du 14/12/2009, qui n'oblige à rien de
- * plus que de laisser une trace. Et une connexion au compte opérateur
- * économique, qui donne le dossier sans épreuve et, surtout, inscrit
- * l'établissement sur la liste des retraits : c'est ce qui déclenche l'envoi
- * des rectificatifs. C'est la seconde qu'on prend, et c'est pour cela que le
- * compte existe.
+ * Parcours observé sur AW Solutions, en deux temps, et il faut les deux.
  *
- * La distinction compte pour l'ordre des opérations : la page affiche les deux
- * routes à la fois, donc l'épreuve anti-robot y est visible alors même qu'on
- * ne la rencontrera pas. On s'authentifie d'abord, et on ne juge qu'ensuite
- * s'il reste un obstacle sur notre chemin. Une épreuve qui survit à
- * l'authentification, elle, est un vrai mur : on s'arrête.
+ * L'adresse « dematEnt.login&type=DCE » publiée par l'avis ne propose, pour un
+ * visiteur anonyme, qu'un téléchargement protégé par une épreuve anti-robot —
+ * celle de l'arrêté du 14/12/2009, qui n'oblige à rien de plus que de laisser
+ * une trace. Contrairement à ce que son nom laisse croire, elle ne porte aucun
+ * formulaire de connexion : vérifié, il n'y a pas de champ de mot de passe.
  *
- *     node scripts/retrait-dce.mjs --url "<adresse DCE de l'avis>"
- *     node scripts/retrait-dce.mjs --url "…" --mode diagnostic
+ * La connexion se fait ailleurs, sur une adresse de la même consultation qui
+ * redirige vers Keycloak. Une fois la session ouverte, on revient sur la page
+ * du dossier, qui n'a plus affaire à un visiteur anonyme.
+ *
+ * Pourquoi se connecter plutôt que de prendre la voie anonyme : le retrait
+ * identifié inscrit l'établissement sur la liste des retraits, et c'est ce qui
+ * déclenche l'envoi des avis rectificatifs. C'est la raison d'être du compte.
+ *
+ * D'où deux adresses, et deux rôles distincts :
+ *
+ *     node scripts/retrait-dce.mjs \
+ *       --auth "<adresse de la consultation, qui mène à Keycloak>" \
+ *       --url  "<adresse du DCE publiée par l'avis>"
+ *
+ *     --mode diagnostic : décrit les deux pages et ne télécharge rien.
+ *
+ * La phase d'authentification ne clique sur rien. Elle traverse la page sur
+ * laquelle Keycloak nous dépose — qui se trouve être le début du parcours de
+ * dépôt — et s'en va. Regarder une page n'engage personne ; c'est cliquer qui
+ * engage, et le garde-fou du dépôt veille sur la phase où l'on clique.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -133,8 +144,61 @@ async function decrire(page) {
   });
 }
 
+/**
+ * Ouvre la session sur le profil d'acheteur.
+ *
+ * Ne clique sur rien d'autre que le bouton de connexion. Keycloak dépose
+ * l'utilisateur sur la page de son choix — ici le début du parcours de dépôt —
+ * et ce n'est pas une raison pour y toucher.
+ */
+async function authentifier(page, url, login, motDePasse) {
+  console.log(`Authentification : ${url}`);
+  await page.goto(url, { waitUntil: "networkidle", timeout: 90_000 });
+
+  const protection = await protectionDetectee(page);
+  if (protection) {
+    console.error(`Protection sur la page de connexion (${protection}). Arrêt volontaire.`);
+    await page.screenshot({ path: `${SORTIE}/protection-connexion.png`, fullPage: true });
+    return { ok: false, code: 2 };
+  }
+
+  const champMotDePasse = page.locator('input[type="password"]').first();
+  if ((await champMotDePasse.count()) === 0) {
+    console.error(
+      "Aucun formulaire de connexion sur cette adresse. Vérifiez --auth : il faut l'adresse de la " +
+        "consultation qui redirige vers l'authentification, pas celle du DCE.",
+    );
+    await page.screenshot({ path: `${SORTIE}/connexion-introuvable.png`, fullPage: true });
+    await writeFile(`${SORTIE}/connexion-introuvable.json`, JSON.stringify(await decrire(page), null, 2), "utf8");
+    return { ok: false, code: 3 };
+  }
+
+  await page.locator('input[name="username"], input[type="text"], input[type="email"]').first().fill(login);
+  await champMotDePasse.fill(motDePasse);
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "networkidle", timeout: 90_000 }).catch(() => {}),
+    page.locator('input[type="submit"], button[type="submit"]').first().click(),
+  ]);
+  await page.waitForTimeout(5000);
+
+  // Un champ de mot de passe encore présent signale un refus : la page de
+  // connexion s'est réaffichée.
+  if ((await page.locator('input[type="password"]').count()) > 0) {
+    console.error(
+      "Connexion refusée. Vérifiez AWS_LOGIN et AWS_PASSWORD dans les secrets du dépôt — " +
+        "le mot de passe a-t-il bien été changé puis redéposé ?",
+    );
+    await page.screenshot({ path: `${SORTIE}/connexion-refusee.png`, fullPage: true });
+    return { ok: false, code: 4 };
+  }
+
+  console.log(`Session ouverte. Keycloak a déposé la session sur : ${page.url()}`);
+  return { ok: true };
+}
+
 async function main() {
   const cible = argument("url");
+  const authUrl = argument("auth");
   const mode = argument("mode", "retrait");
   const login = process.env.AWS_LOGIN;
   const motDePasse = process.env.AWS_PASSWORD;
@@ -162,54 +226,24 @@ async function main() {
   const page = await contexte.newPage();
 
   try {
-    console.log(`Ouverture de la consultation : ${cible}`);
-    await page.goto(cible, { waitUntil: "networkidle", timeout: 90_000 });
+    if (authUrl) {
+      const auth = await authentifier(page, authUrl, login, motDePasse);
+      if (!auth.ok) {
+        process.exitCode = auth.code;
+        return;
+      }
 
-    // On ne juge pas les protections avant d'avoir pris notre route.
-    //
-    // La page du DCE présente les deux accès côte à côte : l'épreuve
-    // anti-robot du téléchargement anonyme y est donc dans le HTML même quand
-    // on ne la rencontrera jamais. Abandonner ici, c'était renoncer à la porte
-    // qui nous est ouverte parce que l'autre est fermée.
-    const champMotDePasse = page.locator('input[type="password"]').first();
-    if ((await champMotDePasse.count()) > 0) {
-      console.log("Page d'authentification détectée, connexion…");
-      await page.locator('input[name="username"], input[type="text"], input[type="email"]').first().fill(login);
-      await champMotDePasse.fill(motDePasse);
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: "networkidle", timeout: 90_000 }).catch(() => {}),
-        page.locator('input[type="submit"], button[type="submit"]').first().click(),
-      ]);
-      await page.waitForTimeout(5000);
+      // Décrire la page d'arrivée aide à trouver où se fait le retrait dans
+      // l'application : c'est de l'observation, et aucun clic n'en découle.
+      const arrivee = await decrire(page);
+      await page.screenshot({ path: `${SORTIE}/apres-connexion.png`, fullPage: true });
+      await writeFile(`${SORTIE}/apres-connexion.json`, JSON.stringify(arrivee, null, 2), "utf8");
     } else {
-      console.log("Pas de formulaire d'authentification : session déjà ouverte, ou page inattendue.");
+      console.log("Aucun --auth : on tente la page du dossier telle quelle.");
     }
 
-    // Maintenant le jugement a un sens : ce qui reste est sur notre chemin.
-    const protection = await protectionDetectee(page);
-    if (protection) {
-      console.error(
-        `Protection après authentification (${protection}). Arrêt volontaire : une épreuve qui ` +
-          "survit à la connexion est un vrai mur, et la franchir n'est pas de notre ressort.",
-      );
-      await page.screenshot({ path: `${SORTIE}/protection.png`, fullPage: true });
-      process.exitCode = 2;
-      return;
-    }
-
-    // Un champ de mot de passe encore présent signale un refus : la page de
-    // connexion s'est réaffichée.
-    if ((await page.locator('input[type="password"]').count()) > 0) {
-      console.error(
-        "Connexion refusée. Vérifiez AWS_LOGIN et AWS_PASSWORD dans les secrets du dépôt — " +
-          "le mot de passe a-t-il bien été changé puis redéposé ?",
-      );
-      await page.screenshot({ path: `${SORTIE}/connexion-refusee.png`, fullPage: true });
-      process.exitCode = 4;
-      return;
-    }
-
-    console.log(`Connecté. Page courante : ${page.url()}`);
+    console.log(`Page du dossier : ${cible}`);
+    await page.goto(cible, { waitUntil: "networkidle", timeout: 90_000 });
 
     const depot = await parcoursDeDepot(page);
     if (depot) {
@@ -228,8 +262,24 @@ async function main() {
     await writeFile(`${SORTIE}/consultation.json`, JSON.stringify(vue, null, 2), "utf8");
     console.log(JSON.stringify(vue, null, 2));
 
+    const protection = await protectionDetectee(page);
+
     if (mode === "diagnostic") {
-      console.log("\nMode diagnostic : session ouverte, page décrite, rien n'est téléchargé.");
+      console.log(
+        `\nMode diagnostic : rien n'est téléchargé.` +
+          (protection ? ` Une protection est présente sur cette page (${protection}).` : ""),
+      );
+      return;
+    }
+
+    if (protection) {
+      console.error(
+        `Protection sur la page du dossier (${protection}), session ouverte comprise. Arrêt volontaire : ` +
+          "la franchir n'est pas de notre ressort. Si le retrait identifié existe, il est ailleurs " +
+          "dans l'application — les intitulés de la page d'arrivée figurent dans apres-connexion.json.",
+      );
+      await page.screenshot({ path: `${SORTIE}/protection.png`, fullPage: true });
+      process.exitCode = 2;
       return;
     }
 
