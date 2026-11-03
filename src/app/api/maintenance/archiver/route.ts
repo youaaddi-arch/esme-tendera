@@ -39,10 +39,27 @@ export const maxDuration = 60;
  * pourquoi. Le rapprochement est celui de la reprise, date limite
  * éliminatoire comprise.
  *
+ * Deux façons de désigner ce qui sort, et la seconde vaut mieux quand elle
+ * s'applique.
+ *
+ * Par **références** : la liste des affaires à archiver, telle quelle.
+ *
+ * Par **règle** : « tout ce qui n'est ni au tableau, ni arrivé depuis telle
+ * date ». C'est l'énoncé réel du tri — on garde ce qui a été retenu, on garde
+ * ce que la veille vient de ramener et qui n'a pas encore été regardé, et le
+ * reste sort. Une liste de références figée dit la même chose un instant
+ * donné, puis cesse d'être vraie : une affaire créée entre le calcul et
+ * l'appel y manque, une affaire déplacée entre-temps y figure encore. La
+ * règle, elle, se relit et se rejoue.
+ *
  *     POST /api/maintenance/archiver
  *     { "references": ["AO-2026-0012", …], "motif": "hors sélection du 03/11" }
  *     { "references": [...], "simuler": true }   → ne change rien
  *     { "references": [...], "epargner": [ {acheteur, objet, limite}, … ] }
+ *
+ *     { "selection": { "creeesAvant": "2026-11-02T00:00:00+01:00" },
+ *       "epargner": [ … lignes du tableau … ],
+ *       "motif": "hors sélection du 03/11", "simuler": true }
  */
 
 /** Étapes où rien n'est engagé : seules celles-là sont archivables. */
@@ -58,7 +75,22 @@ type Corps = {
   motif?: unknown;
   simuler?: unknown;
   epargner?: unknown;
+  selection?: unknown;
 };
+
+/**
+ * Lit une date de l'appel.
+ *
+ * Dans un corps JSON le « + » d'un décalage horaire survit, contrairement à
+ * une chaîne de requête : pas de réparation à faire ici, seulement un refus
+ * net quand la date est illisible. Mieux vaut une erreur qu'une borne
+ * silencieusement ramenée à maintenant, qui archiverait tout.
+ */
+function lireDate(valeur: unknown): Date | null {
+  if (typeof valeur !== "string" || !valeur.trim()) return null;
+  const date = new Date(valeur);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
 
 export async function POST(request: Request) {
   const autorisation = await autoriserMaintenance(request);
@@ -66,15 +98,29 @@ export async function POST(request: Request) {
   const { par } = autorisation;
 
   const corps = (await request.json().catch(() => null)) as Corps | null;
+
+  const selection = (corps?.selection ?? null) as { creeesAvant?: unknown } | null;
+  const parRegle = selection !== null && typeof selection === "object";
+
   const brutes = Array.isArray(corps?.references) ? corps.references : null;
-  if (!brutes || brutes.length === 0) {
+  if (!parRegle && (!brutes || brutes.length === 0)) {
     return NextResponse.json(
-      { erreur: "Fournissez « references » : la liste des références d'affaires à archiver." },
+      {
+        erreur:
+          "Fournissez « references » (la liste des affaires à archiver) ou « selection » " +
+          "(la règle : creeesAvant).",
+      },
+      { status: 400 },
+    );
+  }
+  if (parRegle && brutes) {
+    return NextResponse.json(
+      { erreur: "« references » et « selection » s'excluent : désignez une liste, ou énoncez une règle." },
       { status: 400 },
     );
   }
 
-  const references = [...new Set(brutes.filter((r): r is string => typeof r === "string" && Boolean(r.trim())))];
+  const references = [...new Set((brutes ?? []).filter((r): r is string => typeof r === "string" && Boolean(r.trim())))];
   if (references.length > 1000) {
     return NextResponse.json({ erreur: "Au plus 1000 références par appel." }, { status: 400 });
   }
@@ -82,8 +128,32 @@ export async function POST(request: Request) {
   const motif = typeof corps?.motif === "string" && corps.motif.trim() ? corps.motif.trim() : null;
   const simuler = corps?.simuler === true;
 
+  // La borne de création est obligatoire sous forme de règle, et refusée si
+  // elle est illisible. Sans elle, la règle archiverait l'ensemble du
+  // portefeuille non tranché, y compris ce que la veille vient d'apporter.
+  let creeesAvant: Date | null = null;
+  if (parRegle) {
+    creeesAvant = lireDate(selection?.creeesAvant);
+    if (!creeesAvant) {
+      return NextResponse.json(
+        {
+          erreur:
+            "« selection.creeesAvant » est obligatoire et doit être une date ISO lisible — " +
+            "les affaires créées depuis cette date sont épargnées.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
   const trouvees = await prisma.tender.findMany({
-    where: { reference: { in: references } },
+    where: parRegle
+      ? {
+          archived: false,
+          createdAt: { lt: creeesAvant as Date },
+          stage: { in: [...ETAPES_SANS_ENGAGEMENT] },
+        }
+      : { reference: { in: references } },
     select: {
       id: true, reference: true, stage: true, archived: true,
       buyer: true, title: true, objectSummary: true, deadlineAt: true,
@@ -135,7 +205,9 @@ export async function POST(request: Request) {
   if (simuler) {
     return NextResponse.json({
       simulation: true,
-      demandees: references.length,
+      mode: parRegle ? "regle" : "liste",
+      regle: parRegle ? { creeesAvant: creeesAvant?.toISOString(), lignesAuTableau: lignes.length } : null,
+      demandees: parRegle ? trouvees.length : references.length,
       archivables: aArchiver.length,
       dejaArchivees: dejaArchivees.length,
       epargneesCarEngagees: engagees,
@@ -167,6 +239,8 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({
+    mode: parRegle ? "regle" : "liste",
+    regle: parRegle ? { creeesAvant: creeesAvant?.toISOString(), lignesAuTableau: lignes.length } : null,
     archivees: aArchiver.length,
     dejaArchivees: dejaArchivees.length,
     epargneesCarEngagees: engagees,
