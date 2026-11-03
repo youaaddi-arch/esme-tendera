@@ -29,6 +29,21 @@ export type DecisionInput = {
   /** Lots visés par un GO. Obligatoires dès que la consultation est allotie. */
   lotIds?: string[];
   /**
+   * Autorise un GO sur une consultation allotie sans désigner de lots.
+   *
+   * La règle existe pour une bonne raison : se positionner sans dire sur quoi
+   * laisse une information manquante que la rédaction paiera, et c'est le lot
+   * qui pilote ensuite le mémoire technique et le chiffrage.
+   *
+   * Mais la règle sert la décision, elle ne la remplace pas. Quand les lots
+   * de l'avis n'ont pas d'intitulé exploitable, refuser le GO revient à
+   * perdre la décision pour un détail de forme. Qui décide peut donc passer
+   * outre — explicitement, jamais par défaut, et la motivation enregistrée
+   * porte la mention, de sorte que celui qui rédigera sache qu'il reste un
+   * choix à faire.
+   */
+  sansLots?: boolean;
+  /**
    * Qui décide. Obligatoire, et non facultatif par commodité.
    *
    * Une décision engage l'établissement : elle ouvre une réponse ou elle
@@ -83,7 +98,8 @@ export async function recordDecision(
   // Un accord-cadre alloti ne se gagne pas en bloc : se positionner sans dire
   // sur quoi ne veut rien dire, et c'est le lot qui pilote ensuite le mémoire
   // technique et le chiffrage.
-  if (status === "GO" && lots.length > 0 && selectedLotIds.length === 0) {
+  const sansLots = input.sansLots === true;
+  if (status === "GO" && lots.length > 0 && selectedLotIds.length === 0 && !sansLots) {
     return {
       ok: false,
       message: `Cette consultation comporte ${lots.length} lot(s) : indiquez celui ou ceux sur lesquels vous vous positionnez.`,
@@ -98,12 +114,20 @@ export async function recordDecision(
 
   const retenus = status === "GO" ? lots.filter((lot) => selectedLotIds.includes(lot.id)) : [];
 
+  // La dérogation est inscrite dans la motivation, pas seulement dans un
+  // champ : c'est le texte que lira celui qui rédige la réponse.
+  const motivation =
+    status === "GO" && sansLots && retenus.length === 0 && lots.length > 0
+      ? `${rationale}\n\n[GO posé sans désigner de lot, sur décision explicite. Cette consultation ` +
+        `comporte ${lots.length} lot(s) : les lots visés restent à préciser avant la rédaction.]`
+      : rationale;
+
   await prisma.decision.updateMany({ where: { tenderId, superseded: false }, data: { superseded: true } });
   await prisma.decision.create({
     data: {
       tenderId,
       status,
-      rationale,
+      rationale: motivation,
       reason: status === "NO_GO" ? reason : null,
       lotIds: retenus.map((lot) => lot.id),
       lotLabels: retenus.map((lot) => `Lot ${lot.number} — ${lot.title}`),
@@ -146,7 +170,7 @@ export async function recordDecision(
       (retenus.length > 0 ? ` — lot(s) ${retenus.map((lot) => lot.number).join(", ")}` : "") +
       ".",
     payload: {
-      motivation: rationale,
+      motivation,
       lots: retenus.map((lot) => `Lot ${lot.number} — ${lot.title}`),
     },
   });

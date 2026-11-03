@@ -44,3 +44,19 @@ export function identifiantDepuisLien(lien: string): { source: "BOAMP" | "TED"; 
 
   return null;
 }
+
+/**
+ * Forme comparable d'un identifiant d'avis.
+ *
+ * Le même avis TED s'écrit « 725368-2026 » dans un lien d'agrégateur,
+ * « 00725368-2026 » dans la réponse de l'API, et « TED-00725368-2026 » dans
+ * notre base. Comparer les chaînes telles quelles fait manquer la
+ * correspondance, et l'on retombe alors sur une recherche approximative alors
+ * que l'identifiant exact était en main.
+ *
+ * Un identifiant du BOAMP, lui, s'écrit pareil partout : la fonction le laisse
+ * intact.
+ */
+export function clefIdentifiant(valeur: string): string {
+  return valeur.replace(/^TED-/i, "").replace(/^0+/, "");
+}

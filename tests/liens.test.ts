@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { identifiantDepuisLien } from "../src/lib/veille/liens";
+import { clefIdentifiant, identifiantDepuisLien } from "../src/lib/veille/liens";
 
 /**
  * Ces cas viennent d'un tableau de tri réel et de vérifications faites chez
@@ -68,4 +68,24 @@ test("un lien d'agrégateur sans identifiant de source ne rend rien", () => {
   );
   assert.equal(identifiantDepuisLien(""), null);
   assert.equal(identifiantDepuisLien("Non retrouvé – chercher l'objet sur francemarches.com"), null);
+});
+
+/**
+ * La forme comparable d'un identifiant.
+ *
+ * Le même avis TED s'écrit de trois façons selon l'endroit, et comparer les
+ * chaînes telles quelles faisait manquer la correspondance : une affaire créée
+ * depuis un identifiant TED exact était ensuite notée à 36 % par une
+ * recherche de ressemblance, parce que la clé ne collait pas.
+ */
+test("la clé d'un identifiant TED ignore le préfixe et les zéros de tête", () => {
+  assert.equal(clefIdentifiant("TED-00725368-2026"), "725368-2026");
+  assert.equal(clefIdentifiant("TED-725368-2026"), "725368-2026");
+  assert.equal(clefIdentifiant("00725368-2026"), "725368-2026");
+  assert.equal(clefIdentifiant("725368-2026"), "725368-2026");
+});
+
+test("un identifiant BOAMP est laissé intact", () => {
+  assert.equal(clefIdentifiant("26-92262"), "26-92262");
+  assert.equal(clefIdentifiant("26-103940"), "26-103940");
 });

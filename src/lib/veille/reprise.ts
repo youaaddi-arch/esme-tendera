@@ -24,7 +24,7 @@ import "server-only";
 import { prisma } from "../db";
 import { ingestNotice } from "./ingest";
 import { normalizeBoampRecord } from "./boamp-parse";
-import { identifiantDepuisLien } from "./liens";
+import { clefIdentifiant, identifiantDepuisLien } from "./liens";
 import { normalizeTedNotice, TED_FIELDS, type TedRecord } from "./ted-parse";
 import { persistMatching } from "../matching/persist";
 import type { NormalizedNotice } from "./types";
@@ -337,8 +337,7 @@ export async function repriseSelection(
   // l'API, et « TED-00741685-2026 » dans notre base. On indexe donc sur les
   // chiffres significatifs plutôt que sur la chaîne, sinon la recherche
   // retombait sur le plein texte du BOAMP alors que l'avis était là.
-  const clef = (valeur: string) => valeur.replace(/^TED-/, "").replace(/^0+/, "");
-  const tedParNumero = new Map(avisTed.map((a) => [clef(a.sourceNoticeId), a]));
+  const tedParNumero = new Map(avisTed.map((a) => [clefIdentifiant(a.sourceNoticeId), a]));
 
   const trouvailles: { ligne: Ligne; avis: NormalizedNotice; source: "boamp" | "ted"; score: number }[] = [];
   const rapport: RepriseLigne[] = [];
@@ -349,7 +348,7 @@ export async function repriseSelection(
     let score = 1;
 
     if (ligne.source === "TED" && ligne.identifiant) {
-      avis = tedParNumero.get(clef(ligne.identifiant)) ?? null;
+      avis = tedParNumero.get(clefIdentifiant(ligne.identifiant)) ?? null;
       source = avis ? "ted" : null;
     } else if (ligne.source === "BOAMP" && ligne.identifiant) {
       avis = await boampParIdweb(ligne.identifiant);

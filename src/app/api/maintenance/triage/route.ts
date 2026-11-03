@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { autoriserMaintenance } from "@/lib/maintenance-auth";
 import { prisma } from "@/lib/db";
 import { recordDecision } from "@/lib/decisions";
-import { identifiantDepuisLien } from "@/lib/veille/liens";
+import { clefIdentifiant, identifiantDepuisLien } from "@/lib/veille/liens";
 import { proximite, SEUIL_CERTITUDE, type Ligne } from "@/lib/veille/reprise";
 import type { NoGoReason } from "@prisma/client";
 
@@ -84,7 +84,7 @@ function lotsVises(
   return { retenus, detail };
 }
 
-type Corps = { lignes?: unknown; motifNoGo?: unknown; simuler?: unknown };
+type Corps = { lignes?: unknown; motifNoGo?: unknown; simuler?: unknown; goSansLots?: unknown };
 
 export async function POST(request: Request) {
   const autorisation = await autoriserMaintenance(request);
@@ -115,6 +115,9 @@ export async function POST(request: Request) {
 
   const motifNoGo = (typeof corps?.motifNoGo === "string" ? corps.motifNoGo : "") as NoGoReason | "";
   const simuler = corps?.simuler !== false;
+  // Dérogation demandée explicitement : poser le GO même quand les lots de
+  // l'avis n'ont pas d'intitulé permettant de les rapprocher du tableau.
+  const goSansLots = corps?.goSansLots === true;
 
   const lignes: LigneTriage[] = brutes.map((brute) => {
     const l = (brute ?? {}) as Record<string, unknown>;
@@ -154,9 +157,27 @@ export async function POST(request: Request) {
     where: { archived: false, goNoGo: "A_DECIDER" },
     select: {
       id: true, reference: true, buyer: true, title: true, objectSummary: true, deadlineAt: true,
+      sourceNoticeId: true,
       lots: { orderBy: { number: "asc" }, select: { id: true, number: true, title: true } },
     },
   });
+
+  /**
+   * Les affaires indexées par l'identifiant de leur avis.
+   *
+   * C'est la correspondance exacte, et elle passe devant la ressemblance.
+   * Mesuré : les fiches de PFC-Ouest et de RTE avaient été créées depuis les
+   * identifiants TED lus dans les liens du tableau, et le triage les notait
+   * ensuite à 36 % et 35 % en essayant de les redeviner par les mots — le
+   * libellé d'acheteur du tableau ne ressemble pas à celui du JOUE, et l'avis
+   * TED ne publie pas de date limite, donc rien ne venait confirmer. La
+   * correspondance était en main et on la jetait.
+   */
+  const parIdentifiant = new Map(
+    affaires
+      .filter((a) => a.sourceNoticeId)
+      .map((a) => [clefIdentifiant(a.sourceNoticeId as string), a]),
+  );
 
   const rapport: {
     acheteur: string;
@@ -171,9 +192,12 @@ export async function POST(request: Request) {
   let appliquees = 0;
 
   for (const ligne of tranchees) {
-    const classees = affaires
-      .map((a) => ({ a, s: proximite(ligne, a) }))
-      .sort((x, y) => y.s - x.s);
+    // L'identifiant d'abord : un avis désigné par son numéro ne se devine pas.
+    const exacte = ligne.identifiant ? parIdentifiant.get(clefIdentifiant(ligne.identifiant)) : undefined;
+
+    const classees = exacte
+      ? [{ a: exacte, s: 1 }]
+      : affaires.map((a) => ({ a, s: proximite(ligne, a) })).sort((x, y) => y.s - x.s);
     const meilleure = classees[0];
 
     if (!meilleure || meilleure.s < SEUIL_CERTITUDE) {
@@ -200,7 +224,9 @@ export async function POST(request: Request) {
       const vises = lotsVises(ligne.lots ?? "", cible.lots);
       lotIds = vises.retenus;
       detailLots = vises.detail;
-      if (lotIds.length === 0) {
+      if (lotIds.length === 0 && goSansLots) {
+        detailLots = [`sans lot désigné (${cible.lots.length} lot(s) à préciser)`];
+      } else if (lotIds.length === 0) {
         rapport.push({
           acheteur: ligne.acheteur,
           decision: ligne.decision,
@@ -211,7 +237,12 @@ export async function POST(request: Request) {
           message:
             `Affaire trouvée, mais aucun de ses ${cible.lots.length} lot(s) n'est reconnu dans la ` +
             "colonne « lots » du tableau. Un GO sur tous les lots n'a été décidé par personne : " +
-            "à poser sur la fiche.",
+            "à poser sur la fiche.\n" +
+            // Les deux textes côte à côte : c'est ce qu'il faut sous les yeux
+            // pour voir si le rapprochement est faisable ou si les lots de
+            // l'avis n'ont simplement pas d'intitulé exploitable.
+            `Lots de l'affaire : ${cible.lots.map((l) => `${l.number} « ${l.title || "(sans intitulé)"} »`).join(" ; ")}\n` +
+            `Colonne « lots » du tableau : ${(ligne.lots ?? "").replace(/\s+/g, " ").slice(0, 300) || "(vide)"}`,
         });
         continue;
       }
@@ -243,6 +274,7 @@ export async function POST(request: Request) {
       rationale: motivation,
       reason: estGo ? null : (motifNoGo as NoGoReason),
       lotIds,
+      sansLots: goSansLots,
       userId: par.userId,
     });
 

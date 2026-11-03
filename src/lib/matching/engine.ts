@@ -413,13 +413,47 @@ export function runMatching(
     Math.round(adaptationBase * 0.7 + (partialEsme.length ? aggregate(partialEsme) * 0.3 : 0)),
   );
 
+  /**
+   * Score global : la meilleure voie pour répondre, non la moyenne des voies.
+   *
+   * C'était une moyenne pondérée des trois familles, et c'était faux. La
+   * question que ce nombre doit trancher est « à quel point pouvons-nous
+   * répondre à ce marché ? ». Y répondre par une moyenne fait diluer la force
+   * d'une famille par la faiblesse des autres, qui parlent d'autre chose.
+   *
+   * Mesuré : un marché de formation au management de projet, dont le
+   * catalogue couvre l'objet à 46 — PROJ 100 « Les fondamentaux du management
+   * de projets complexes » en tête — ressortait à 38, parce que les formations
+   * voisines (29) et le groupe IONIS (18) tiraient la moyenne vers le bas. Un
+   * marché en plein cœur de catalogue ne pouvait structurellement pas marquer
+   * haut, et le nombre affiché démentait le classement, qui était juste.
+   *
+   * On prend donc la meilleure famille, plus une fraction de la deuxième :
+   * disposer de plusieurs sources est un atout réel — on peut composer une
+   * réponse — mais cela ne vaut pas une seconde couverture pleine.
+   *
+   * La préférence entre familles subsiste, et c'est à cela que servent les
+   * pondérations : à couverture égale, notre propre catalogue vaut mieux
+   * qu'une formation à adapter ou qu'un partenariat avec une école du groupe.
+   * Elle module de trente pour cent au plus. Une préférence ne disqualifie
+   * pas : mobiliser EPITA sur un marché de cybersécurité est une vraie
+   * réponse, pas un pis-aller à diviser par quatre.
+   *
+   * Ce nombre ne décide de rien. L'appréciation — cœur de catalogue, proche,
+   * dans le périmètre — se lit sur `scoreCatalogue` face à ses seuils, et
+   * reste donc inchangée : ce correctif ne peut pas ramener de faux positifs.
+   */
   const normalized = normalize(weights);
-  const scoreGlobal = Math.round(
-    (scoreCatalogue * normalized.catalogue +
-      scoreVoisines * normalized.voisines +
-      scoreIonis * normalized.ionis) /
-      100,
-  );
+  const familles = [
+    { score: scoreCatalogue, poids: normalized.catalogue },
+    { score: scoreVoisines, poids: normalized.voisines },
+    { score: scoreIonis, poids: normalized.ionis },
+  ];
+  const referencePoids = Math.max(...familles.map((f) => f.poids)) || 1;
+  const effectifs = familles
+    .map((f) => f.score * (0.7 + 0.3 * (f.poids / referencePoids)))
+    .sort((a, b) => b - a);
+  const scoreGlobal = Math.round(Math.min(97, effectifs[0] + 0.15 * (effectifs[1] ?? 0)));
 
   // Compétences demandées : concepts repérés dans la consultation, couverts ou non.
   const topMatches = scored.filter((item) => item.score >= 35).slice(0, 10);
