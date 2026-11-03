@@ -5,11 +5,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { requireSession } from "@/lib/auth";
-import { recordAudit } from "@/lib/audit";
-import { prisma } from "@/lib/db";
 import { assertCan, PermissionError } from "@/lib/rbac";
-import { recomputeMatching } from "@/lib/matching/service";
-import { nextManualReference } from "@/lib/tenders";
+import { createManualTender } from "@/lib/tender-manuel";
 import type { ActionState } from "@/app/(app)/affaires/[id]/actions";
 
 const schema = z.object({
@@ -42,46 +39,30 @@ export async function createTenderAction(formData: FormData): Promise<ActionStat
     assertCan(session.role, "tender.create");
 
     const parsed = schema.parse(Object.fromEntries(formData));
-    const reference = await nextManualReference();
-    const amount = parsed.amountMaxEur?.trim()
+    const brut = parsed.amountMaxEur?.trim()
       ? Number.parseFloat(parsed.amountMaxEur.replace(/\s/g, "").replace(",", "."))
       : null;
 
-    const connector = await prisma.sourceConnector.findUnique({ where: { key: "import-manuel" } });
-
-    const tender = await prisma.tender.create({
-      data: {
-        reference,
-        title: parsed.title,
-        buyer: parsed.buyer,
-        consultationRef: parsed.consultationRef || null,
-        objectSummary: parsed.objectSummary || null,
-        procedure: parsed.procedure || null,
-        deadlineAt: parsed.deadlineAt ? new Date(parsed.deadlineAt) : null,
-        publishedAt: parsed.publishedAt ? new Date(parsed.publishedAt) : null,
-        sourceUrl: parsed.sourceUrl || null,
-        dceSourceUrl: parsed.dceSourceUrl || null,
-        region: parsed.region || null,
-        cpvCodes: (parsed.cpvCodes ?? "").split(/[\s,;]+/).map((code) => code.trim()).filter(Boolean),
-        amountKind: parsed.amountKind,
-        amountMaxEur: Number.isFinite(amount) ? amount : null,
-        sourceConnectorId: connector?.id ?? null,
-        ownerId: session.id,
-        stage: "AO_IDENTIFIES",
-      },
+    // Les règles de la création manuelle vivent dans `createManualTender`,
+    // parce que la reprise d'un tri fait ailleurs y mène aussi.
+    const tender = await createManualTender({
+      title: parsed.title,
+      buyer: parsed.buyer,
+      consultationRef: parsed.consultationRef,
+      objectSummary: parsed.objectSummary,
+      procedure: parsed.procedure,
+      deadlineAt: parsed.deadlineAt ? new Date(parsed.deadlineAt) : null,
+      publishedAt: parsed.publishedAt ? new Date(parsed.publishedAt) : null,
+      sourceUrl: parsed.sourceUrl,
+      dceSourceUrl: parsed.dceSourceUrl,
+      region: parsed.region,
+      cpvCodes: (parsed.cpvCodes ?? "").split(/[\s,;]+/).map((code) => code.trim()).filter(Boolean),
+      amountKind: parsed.amountKind,
+      amountMaxEur: Number.isFinite(brut as number) ? brut : null,
+      userId: session.id,
     });
     createdId = tender.id;
 
-    await recordAudit({
-      action: "tender.create",
-      entity: "Tender",
-      entityId: tender.id,
-      tenderId: tender.id,
-      userId: session.id,
-      summary: `Affaire ${reference} créée manuellement.`,
-    });
-
-    await recomputeMatching(tender.id, { userId: session.id, reason: "création manuelle" });
     revalidatePath("/pipeline");
     revalidatePath("/affaires");
   } catch (error) {
