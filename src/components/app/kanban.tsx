@@ -67,13 +67,12 @@ export function KanbanBoard({
   /**
    * Colonnes qui ne se posent pas, parce que leur contenu n'est pas une étape.
    *
-   * « Go » et « No Go » reflètent une décision qui exige des éléments qu'un
-   * glisser-déposer ne peut pas saisir — les lots visés dans un cas, le motif
-   * dans l'autre. Les y déposer silencieusement reviendrait à fabriquer une
-   * décision sans justification.
+   * « No Go » reflète une décision qui exige un motif, qu'un glisser-déposer
+   * ne peut pas saisir. Y déposer une affaire reviendrait à fabriquer une
+   * décision sans justification. Pour sortir une affaire sans trancher, la
+   * colonne « Abandonnées sans décision » est là, et elle dit ce qu'elle est.
    */
   const DERIVED_COLUMNS: Partial<Record<BoardColumnKey, string>> = {
-    GO: "Un GO se prend depuis la fiche : il faut indiquer les lots sur lesquels vous vous positionnez.",
     NO_GO: "Un NO GO se prend depuis la fiche : le motif est obligatoire.",
   };
 
