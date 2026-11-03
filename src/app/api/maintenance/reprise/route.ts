@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { autoriserMaintenance } from "@/lib/maintenance-auth";
+
 import { repriseSelection, type Ligne } from "@/lib/veille/reprise";
 
 // Près de quatre-vingts appels au BOAMP : la minute du plan Hobby suffit tout
@@ -24,19 +26,9 @@ export const maxDuration = 60;
  * compte, parce qu'elle désigne les lignes qu'il faudra traiter autrement.
  */
 export async function POST(request: Request) {
-  const secrets = [process.env.TENDERA_CRON_SECRET, process.env.CRON_SECRET].filter(
-    (value): value is string => Boolean(value),
-  );
-  if (secrets.length === 0) {
-    return NextResponse.json({ erreur: "Aucun jeton de maintenance défini." }, { status: 503 });
-  }
-
-  const url = new URL(request.url);
-  const header = request.headers.get("authorization");
-  const provided = header?.startsWith("Bearer ") ? header.slice(7) : url.searchParams.get("jeton");
-  if (!provided || !secrets.includes(provided)) {
-    return NextResponse.json({ erreur: "Jeton invalide." }, { status: 401 });
-  }
+  const autorisation = await autoriserMaintenance(request);
+  if (!autorisation.ok) return autorisation.reponse;
+  const { par } = autorisation;
 
   const corps = (await request.json().catch(() => null)) as
     | { lignes?: unknown; appliquer?: unknown }
@@ -73,7 +65,7 @@ export async function POST(request: Request) {
 
   try {
     const rapport = await repriseSelection(lignes, { appliquer: corps?.appliquer === true });
-    return NextResponse.json(rapport);
+    return NextResponse.json({ ...rapport, par: par.acteur });
   } catch (error) {
     return NextResponse.json({ erreur: (error as Error).message }, { status: 502 });
   }

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+
+import { autoriserMaintenance } from "@/lib/maintenance-auth";
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
@@ -31,19 +33,11 @@ export const maxDuration = 30;
  *     POST /api/maintenance/connecteur?cle=ted&jours=60
  */
 export async function POST(request: Request) {
-  const secrets = [process.env.TENDERA_CRON_SECRET, process.env.CRON_SECRET].filter(
-    (value): value is string => Boolean(value),
-  );
-  if (secrets.length === 0) {
-    return NextResponse.json({ erreur: "Aucun jeton de maintenance défini." }, { status: 503 });
-  }
+  const autorisation = await autoriserMaintenance(request);
+  if (!autorisation.ok) return autorisation.reponse;
+  const { par } = autorisation;
 
   const url = new URL(request.url);
-  const header = request.headers.get("authorization");
-  const provided = header?.startsWith("Bearer ") ? header.slice(7) : url.searchParams.get("jeton");
-  if (!provided || !secrets.includes(provided)) {
-    return NextResponse.json({ erreur: "Jeton invalide." }, { status: 401 });
-  }
 
   const cle = url.searchParams.get("cle");
   const connecteur = connectorRegistry.find((entry) => entry.key === cle);
@@ -93,7 +87,8 @@ export async function POST(request: Request) {
     action: "connecteur.resynchronise",
     entity: "SourceConnector",
     entityId: existant.id,
-    actor: "maintenance",
+    actor: par.acteur,
+    userId: par.userId ?? undefined,
     summary:
       `Connecteur ${connecteur.key} resynchronisé : ${avant.statut}/${avant.actif ? "actif" : "inactif"} ` +
       `→ ${apres.status}/${apres.enabled ? "actif" : "inactif"}.`,

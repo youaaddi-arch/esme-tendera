@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { autoriserMaintenance } from "@/lib/maintenance-auth";
+
 import { prisma } from "@/lib/db";
 import { recordAudit } from "@/lib/audit";
 
@@ -43,19 +45,9 @@ type Corps = {
 };
 
 export async function POST(request: Request) {
-  const secrets = [process.env.TENDERA_CRON_SECRET, process.env.CRON_SECRET].filter(
-    (value): value is string => Boolean(value),
-  );
-  if (secrets.length === 0) {
-    return NextResponse.json({ erreur: "Aucun jeton de maintenance défini." }, { status: 503 });
-  }
-
-  const url = new URL(request.url);
-  const header = request.headers.get("authorization");
-  const provided = header?.startsWith("Bearer ") ? header.slice(7) : url.searchParams.get("jeton");
-  if (!provided || !secrets.includes(provided)) {
-    return NextResponse.json({ erreur: "Jeton invalide." }, { status: 401 });
-  }
+  const autorisation = await autoriserMaintenance(request);
+  if (!autorisation.ok) return autorisation.reponse;
+  const { par } = autorisation;
 
   const corps = (await request.json().catch(() => null)) as Corps | null;
   const brutes = Array.isArray(corps?.references) ? corps.references : null;
@@ -116,7 +108,8 @@ export async function POST(request: Request) {
         entity: "Tender",
         entityId: tender.id,
         tenderId: tender.id,
-        actor: "maintenance",
+        actor: par.acteur,
+        userId: par.userId ?? undefined,
         summary: motif ? `Archivée : ${motif}.` : "Archivée sur liste désignée.",
       });
     }

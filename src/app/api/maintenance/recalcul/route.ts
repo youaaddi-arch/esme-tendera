@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+
+import { autoriserMaintenance } from "@/lib/maintenance-auth";
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
@@ -29,19 +31,11 @@ export const maxDuration = 60;
  * écrit en base et n'a aucune raison d'être ouverte.
  */
 export async function POST(request: Request) {
-  const secrets = [process.env.TENDERA_CRON_SECRET, process.env.CRON_SECRET].filter(
-    (value): value is string => Boolean(value),
-  );
-  if (secrets.length === 0) {
-    return NextResponse.json({ erreur: "Aucun jeton de maintenance défini." }, { status: 503 });
-  }
+  const autorisation = await autoriserMaintenance(request);
+  if (!autorisation.ok) return autorisation.reponse;
+  const { par } = autorisation;
 
   const url = new URL(request.url);
-  const header = request.headers.get("authorization");
-  const provided = header?.startsWith("Bearer ") ? header.slice(7) : url.searchParams.get("jeton");
-  if (!provided || !secrets.includes(provided)) {
-    return NextResponse.json({ erreur: "Jeton invalide." }, { status: 401 });
-  }
 
   const taille = Math.min(Math.max(Number(url.searchParams.get("taille") ?? 20) || 20, 1), 50);
   const depuisParam = url.searchParams.get("depuis");
@@ -87,6 +81,7 @@ export async function POST(request: Request) {
     restantes,
     echecs,
     termine: restantes === 0,
+    par: par.acteur,
   });
 }
 
