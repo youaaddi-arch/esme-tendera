@@ -39,8 +39,8 @@ export const stageOrder: PipelineStage[] = [
 export const allowedTransitions: Record<PipelineStage, PipelineStage[]> = {
   AO_IDENTIFIES: ["MATCHING", "GO_NO_GO", "REJETE_NON_POURSUIVI"],
   MATCHING: ["AO_IDENTIFIES", "GO_NO_GO", "REJETE_NON_POURSUIVI"],
-  GO_NO_GO: ["MATCHING", "PREPARATION", "REJETE_NON_POURSUIVI"],
-  PREPARATION: ["GO_NO_GO", "CONTROLE_QUALITE", "PRET_AU_DEPOT", "REJETE_NON_POURSUIVI"],
+  GO_NO_GO: ["AO_IDENTIFIES", "MATCHING", "PREPARATION", "REJETE_NON_POURSUIVI"],
+  PREPARATION: ["AO_IDENTIFIES", "GO_NO_GO", "CONTROLE_QUALITE", "PRET_AU_DEPOT", "REJETE_NON_POURSUIVI"],
   CONTROLE_QUALITE: ["PREPARATION", "PRET_AU_DEPOT", "REJETE_NON_POURSUIVI"],
   PRET_AU_DEPOT: ["CONTROLE_QUALITE", "PREPARATION", "DEPOT_EFFECTUE", "REJETE_NON_POURSUIVI"],
   DEPOT_EFFECTUE: ["NEGOCIATION", "ATTENTE_RESULTAT"],
@@ -60,27 +60,24 @@ export const transitionGuards: Partial<Record<PipelineStage, string>> = {
 /**
  * Colonnes du Kanban.
  *
- * Deux étapes du pipeline se lisent mal en une seule colonne, et ce sont
- * justement celles où le travail se décide :
+ * Une colonne n'est pas forcément une étape, et ne l'est que si elle désigne
+ * un travail distinct. « Go » et « No Go » n'existent pas dans le pipeline :
+ * ce sont l'étape « Go / No Go » plus la décision déjà enregistrée sur
+ * l'affaire. Les éclater à l'affichage évite de dupliquer en base une
+ * information qui s'y trouve déjà.
  *
- * « Go / No Go » mélange ce qui attend un arbitrage et ce qui a été tranché.
- * Elle est donc éclatée à l'affichage, sans être dupliquée en base : une
- * colonne n'est pas une étape, c'est une étape plus un critère déjà présent
- * sur l'affaire — ici la décision humaine. Ajouter des étapes aurait créé
- * deux sources de vérité pour la même information.
- *
- * « Matching », en revanche, n'est pas éclatée : l'étape elle-même ne reçoit
- * que le cœur de catalogue, et les affaires évaluées hors catalogue restent
- * dans « AO identifiés ». Le tri par appréciation se fait par le filtre, qui
- * laisse choisir, plutôt que par une colonne de plus à parcourir.
+ * À l'inverse, trois étapes partagent la première colonne : ce que la veille
+ * vient de repérer, ce que le moteur a reconnu comme cœur de catalogue, et ce
+ * qui a été explicitement porté à l'arbitrage. Elles posaient trois files à
+ * parcourir pour une seule question — répond-on ? — alors que l'appréciation
+ * du moteur se retrouve mieux par le filtre, qui laisse choisir ce qu'on
+ * regarde. Les étapes subsistent en base : seule la lecture est regroupée.
  */
-export type BoardColumnKey = PipelineStage | "GO" | "NO_GO";
+export type BoardColumnKey = Exclude<PipelineStage, "MATCHING" | "GO_NO_GO"> | "GO" | "NO_GO";
 
 /** Étape du pipeline réellement visée par un dépôt dans cette colonne. */
 export const boardColumnStage: Record<BoardColumnKey, PipelineStage> = {
   AO_IDENTIFIES: "AO_IDENTIFIES",
-  MATCHING: "MATCHING",
-  GO_NO_GO: "GO_NO_GO",
   GO: "GO_NO_GO",
   NO_GO: "GO_NO_GO",
   PREPARATION: "PREPARATION",
@@ -94,24 +91,28 @@ export const boardColumnStage: Record<BoardColumnKey, PipelineStage> = {
 };
 
 export const boardColumnOrder: BoardColumnKey[] = [
-  "AO_IDENTIFIES", "MATCHING", "GO_NO_GO", "GO", "NO_GO",
+  "AO_IDENTIFIES", "GO", "NO_GO",
   "PREPARATION", "CONTROLE_QUALITE", "PRET_AU_DEPOT", "DEPOT_EFFECTUE",
   "NEGOCIATION", "ATTENTE_RESULTAT", "MARCHE_ATTRIBUE", "REJETE_NON_POURSUIVI",
 ];
 
 export const boardColumnLabels: Record<BoardColumnKey, string> = {
-  ...stageLabels,
-  MATCHING: "Matching",
-  GO_NO_GO: "Go / No Go — à décider",
+  AO_IDENTIFIES: stageLabels.AO_IDENTIFIES,
   GO: "Go",
   NO_GO: "No Go",
+  PREPARATION: stageLabels.PREPARATION,
+  CONTROLE_QUALITE: stageLabels.CONTROLE_QUALITE,
+  PRET_AU_DEPOT: stageLabels.PRET_AU_DEPOT,
+  DEPOT_EFFECTUE: stageLabels.DEPOT_EFFECTUE,
+  NEGOCIATION: stageLabels.NEGOCIATION,
+  ATTENTE_RESULTAT: stageLabels.ATTENTE_RESULTAT,
+  MARCHE_ATTRIBUE: stageLabels.MARCHE_ATTRIBUE,
+  REJETE_NON_POURSUIVI: stageLabels.REJETE_NON_POURSUIVI,
 };
 
 export const boardColumnHints: Partial<Record<BoardColumnKey, string>> = {
   AO_IDENTIFIES:
-    "Repérées par la veille. Celles qui sortent du cœur de catalogue y restent : filtrez par appréciation pour les trier.",
-  MATCHING: "Cœur de catalogue : des programmes existants répondent au besoin.",
-  GO_NO_GO: "Arbitrage attendu.",
+    "Tout ce qui n'est pas tranché : repéré par la veille, reconnu cœur de catalogue, ou en attente d'arbitrage. Filtrez par appréciation pour trier.",
   GO: "Décision prise : nous répondons. Les lots visés figurent sur la décision.",
   NO_GO: "Décision prise : nous ne répondons pas. Le motif est consigné.",
 };
@@ -120,8 +121,8 @@ export const boardColumnHints: Partial<Record<BoardColumnKey, string>> = {
  * Colonne d'une affaire.
  *
  * Le critère de scission n'est jamais inventé : il vient de la décision
- * enregistrée par un humain. L'appréciation du moteur, elle, est portée par
- * l'étape elle-même.
+ * enregistrée par un humain. Tant qu'elle n'est pas prise, l'affaire reste
+ * dans « AO identifiés », quelle que soit l'étape où elle se trouve.
  */
 export function boardColumnOf(card: {
   stage: PipelineStage;
@@ -130,8 +131,9 @@ export function boardColumnOf(card: {
   if (card.stage === "GO_NO_GO") {
     if (card.goNoGo === "GO") return "GO";
     if (card.goNoGo === "NO_GO") return "NO_GO";
-    return "GO_NO_GO";
+    return "AO_IDENTIFIES";
   }
+  if (card.stage === "MATCHING") return "AO_IDENTIFIES";
   return card.stage;
 }
 

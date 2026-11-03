@@ -8,3 +8,6 @@ storage/
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
+
+# Généré par Next à chaque build (next.config : agentRules).
+AGENTS.md

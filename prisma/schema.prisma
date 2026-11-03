@@ -50,6 +50,8 @@ model User {
   notifications    Notification[]
   documentVersions DocumentVersion[]
   negotiationItems NegotiationItem[]
+  retraitsDemandes DceRetrait[]      @relation("RetraitDemande")
+  retraitsRepondus DceRetrait[]      @relation("RetraitRepondu")
 
   @@index([role])
 }
@@ -283,6 +285,30 @@ enum OutcomeStatus {
   INFRUCTUEUX
 }
 
+/**
+ * État d'un retrait de dossier en cours.
+ *
+ * Le retrait n'est pas instantané et peut avoir besoin de quelqu'un : sur
+ * certaines plateformes il faut lire une épreuve anti-robot. Un simple
+ * « récupéré / pas récupéré » ne sait pas dire « j'attends que vous
+ * regardiez l'image », qui est pourtant l'état le plus fréquent et le seul
+ * qui demande une action.
+ */
+enum DceRetraitEtat {
+  /// En file : aucun ouvrier ne l'a encore pris.
+  EN_ATTENTE
+  /// Un ouvrier navigue sur la plateforme.
+  EN_COURS
+  /// L'image est disponible : on attend une saisie humaine.
+  ATTENTE_CAPTCHA
+  /// Dossier obtenu et versé dans l'affaire.
+  REUSSI
+  /// Échec : la raison est dans « echec ».
+  ECHOUE
+  /// Personne n'a répondu dans le délai, ou l'ouvrier a disparu.
+  ABANDONNE
+}
+
 enum DceStatus {
   /// Pas encore tenté.
   NON_TENTE
@@ -370,6 +396,7 @@ model Tender {
 
   lots             Lot[]
   documents        Document[]
+  retraits         DceRetrait[]
   analysis         TenderAnalysis?
   requirements     Requirement[]
   matchResult      MatchResult?
@@ -457,6 +484,61 @@ enum DocumentScope {
   REPONSE
   /// Document de la base de connaissances.
   CONNAISSANCE
+}
+
+/**
+ * Un retrait de dossier de consultation, de bout en bout.
+ *
+ * Trois acteurs se relaient, et c'est pourquoi l'état est en base plutôt que
+ * dans la mémoire d'un processus : l'application crée la demande quand un GO
+ * est enregistré, un ouvrier extérieur la prend et navigue, et une personne
+ * lit l'épreuve anti-robot quand il y en a une. Chacun peut s'arrêter sans
+ * les autres, et la demande doit survivre à ces arrêts.
+ *
+ * L'ouvrier est extérieur parce qu'il faut un vrai navigateur, maintenu en vie
+ * pendant la saisie : Vercel borne ses fonctions à la minute et n'en a pas.
+ */
+model DceRetrait {
+  id       String         @id @default(cuid())
+  tenderId String
+  tender   Tender         @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  etat     DceRetraitEtat @default(EN_ATTENTE)
+
+  /// Adresse de retrait, recopiée de l'avis au moment de la demande.
+  url String
+
+  /**
+   * L'image de l'épreuve, en data URI.
+   *
+   * Quelques dizaines de kilo-octets, et elle ne survit pas au retrait : la
+   * confier au stockage d'objets, avec sa clé et son effacement, serait
+   * disproportionné pour une donnée aussi courte et aussi périssable.
+   */
+  captchaImage      String?   @db.Text
+  captchaDemandeAt  DateTime?
+  reponse           String?
+  reponduAt         DateTime?
+  reponduById       String?
+  reponduBy         User?     @relation("RetraitRepondu", fields: [reponduById], references: [id], onDelete: SetNull)
+
+  /// Qui a demandé le retrait : l'ingestion des pièces se fait en son nom.
+  demandeParId String?
+  demandePar   User?   @relation("RetraitDemande", fields: [demandeParId], references: [id], onDelete: SetNull)
+
+  /// Nom de l'ouvrier qui l'a pris, et quand : une prise trop vieille se reprend.
+  ouvrier  String?
+  priseAt  DateTime?
+
+  tentatives Int     @default(0)
+  journal    String? @db.Text
+  echec      String?
+  fichier    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([etat, createdAt])
+  @@index([tenderId])
 }
 
 model Document {

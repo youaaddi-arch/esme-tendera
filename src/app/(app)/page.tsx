@@ -7,6 +7,7 @@ import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatAmount, formatDeadline, stageLabels } from "@/lib/labels";
 import { getDashboardStats } from "@/lib/stats";
+import { EN_ATTENTE_ARBITRAGE } from "@/lib/tenders";
 
 export const metadata = { title: "Tableau de bord" };
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export default async function DashboardPage() {
       select: { id: true, reference: true, title: true, buyer: true, deadlineAt: true, stage: true, isDemo: true },
     }),
     prisma.tender.findMany({
-      where: { archived: false, goNoGo: "A_DECIDER", stage: { in: ["MATCHING", "GO_NO_GO"] } },
+      where: { archived: false, ...EN_ATTENTE_ARBITRAGE },
       orderBy: [{ matchResult: { scoreGlobal: "desc" } }, { deadlineAt: "asc" }],
       take: 6,
       select: {
@@ -98,7 +99,7 @@ export default async function DashboardPage() {
             hint={`${stats.goCount} GO · ${stats.noGoCount} NO GO`}
             icon={AlertTriangle}
             tone={stats.toDecide > 0 ? "accent" : "neutral"}
-            href="/pipeline#GO_NO_GO"
+            href="/pipeline#AO_IDENTIFIES"
           />
           <StatTile
             label="Dépôts sous 15 jours"
@@ -180,7 +181,7 @@ export default async function DashboardPage() {
               title="En attente de décision Go / No Go"
               subtitle="Classées par score d'adéquation décroissant."
               action={
-                <Link href="/pipeline#GO_NO_GO" className="text-[13px] font-medium text-esme-600 hover:underline">
+                <Link href="/pipeline#AO_IDENTIFIES" className="text-[13px] font-medium text-esme-600 hover:underline">
                   Tout voir
                 </Link>
               }

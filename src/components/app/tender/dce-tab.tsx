@@ -7,6 +7,7 @@ import { Card, CardHeader, Field, Input, Notice, Table, Td, Th } from "@/compone
 import {
   deleteDocumentAction, markDceUnavailableAction, reclassifyDocumentAction, uploadDceAction,
 } from "@/app/(app)/affaires/[id]/actions";
+import { RetraitDce } from "@/components/app/tender/retrait-dce";
 import { dceStatusLabels, documentKindLabels, formatDateTime } from "@/lib/labels";
 import type { TenderDetail } from "@/lib/tender-detail";
 import type { Permission } from "@/lib/rbac";
@@ -24,9 +25,16 @@ export function DceTab({ tender, permissions }: { tender: TenderDetail; permissi
   const readable = dce.filter((document) => document.extractionStatus === "termine");
   const unreadable = dce.filter((document) => document.extractionStatus !== "termine");
 
+  // Le retrait passe devant tout : c'est l'état qui demande une action, ou
+  // celui qui explique pourquoi l'onglet est vide.
+  const retrait = tender.retraits[0] ?? null;
+
   return (
     <div className="grid gap-5 xl:grid-cols-3">
       <div className="space-y-5 xl:col-span-2">
+        {retrait ? (
+          <RetraitDce tenderId={tender.id} retrait={retrait} canUpload={canUpload} />
+        ) : null}
         {dce.length === 0 ? (
           <Card>
             <CardHeader title="Aucune pièce importée" />

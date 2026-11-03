@@ -3,6 +3,7 @@ import "server-only";
 import type { PipelineStage } from "@prisma/client";
 
 import { prisma } from "./db";
+import { EN_ATTENTE_ARBITRAGE } from "./tenders";
 import { getSetting } from "./settings";
 
 /**
@@ -55,7 +56,7 @@ export async function getDashboardStats(filters: DashboardFilters = {}) {
     prisma.tender.count({ where: { ...where, createdAt: { gte: startOfWeek } } }),
     prisma.tender.count({ where: { ...where, goNoGo: "GO" } }),
     prisma.tender.count({ where: { ...where, goNoGo: "NO_GO" } }),
-    prisma.tender.count({ where: { ...where, goNoGo: "A_DECIDER", stage: { in: ["MATCHING", "GO_NO_GO"] } } }),
+    prisma.tender.count({ where: { ...where, ...EN_ATTENTE_ARBITRAGE } }),
     prisma.tender.count({
       where: {
         ...where,

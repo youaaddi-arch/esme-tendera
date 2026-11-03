@@ -1,0 +1,59 @@
+# Ouvrier qui retire les dossiers de consultation.
+#
+# Il existe ici parce qu'il faut un vrai navigateur, maintenu en vie pendant
+# qu'une personne lit une épreuve anti-robot. Vercel n'en a pas et borne ses
+# fonctions à la minute : ce travail ne peut pas s'y faire.
+#
+# Deux secrets de dépôt sont nécessaires :
+#   TENDERA_URL   — adresse de la plateforme (https://…, sans barre finale)
+#   TENDERA_JETON — jeton de maintenance, celui de TENDERA_CRON_SECRET
+#
+# La cadence est le compromis de cette architecture : après un GO, la demande
+# attend le prochain passage. Un quart d'heure au plus, et la fiche affiche
+# « patientez » entre-temps. Descendre plus bas ferait tourner un runner en
+# permanence pour des files le plus souvent vides.
+name: Ouvrier retrait DCE
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      demandes:
+        description: "Nombre de demandes à traiter au plus"
+        required: false
+        default: "2"
+        type: string
+
+concurrency:
+  # Deux ouvriers en parallèle consommeraient deux épreuves anti-robot pour un
+  # seul dossier. La prise d'une demande est déjà exclusive en base, mais
+  # autant ne pas démarrer le second.
+  group: ouvrier-retrait
+  cancel-in-progress: false
+
+jobs:
+  retirer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Installer le navigateur
+        run: npm install --no-save playwright@1.49.1 && npx playwright install --with-deps chromium
+
+      - name: Retirer les dossiers en attente
+        env:
+          TENDERA_URL: ${{ secrets.TENDERA_URL }}
+          TENDERA_JETON: ${{ secrets.TENDERA_JETON }}
+          OUVRIER: actions-${{ github.run_id }}
+        run: |
+          if [ -z "$TENDERA_URL" ] || [ -z "$TENDERA_JETON" ]; then
+            echo "Secrets TENDERA_URL et TENDERA_JETON absents du dépôt." >&2
+            exit 1
+          fi
+          node scripts/ouvrier-retrait.mjs --demandes "${{ inputs.demandes || '2' }}" --attente 8

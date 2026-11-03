@@ -7,6 +7,24 @@ import { recordAudit } from "./audit";
 import { notify } from "./notifications";
 import { allowedTransitions, stageLabels } from "./labels";
 
+/**
+ * Affaires qui attendent un arbitrage.
+ *
+ * L'étape ne suffit plus à les désigner. Le pipeline ne distingue plus ce que
+ * la veille vient de repérer de ce que le moteur a reconnu : tout cela partage
+ * « AO identifiés ». Une affaire attend donc un arbitrage lorsqu'aucune
+ * décision n'est prise et que quelque chose la signale — le cœur de catalogue
+ * reconnu par le moteur, ou un passage explicite à l'étape Go/No Go.
+ *
+ * Sans cette seconde condition, le compteur dirait « quelques centaines à
+ * arbitrer » : vrai au pied de la lettre, inutilisable comme indicateur.
+ */
+export const EN_ATTENTE_ARBITRAGE = {
+  goNoGo: "A_DECIDER",
+  stage: { in: ["AO_IDENTIFIES", "MATCHING", "GO_NO_GO"] },
+  OR: [{ stage: "GO_NO_GO" }, { matchResult: { is: { nature: "FORMATION_CATALOGUE" } } }],
+} satisfies Prisma.TenderWhereInput;
+
 /** Erreur métier : message destiné à être affiché tel quel à l'utilisateur. */
 export class TenderRuleError extends Error {
   constructor(message: string) {

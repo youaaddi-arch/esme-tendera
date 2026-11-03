@@ -9,6 +9,7 @@ import { requireSession } from "@/lib/auth";
 import { recordAudit, diffFields } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { analyzeTenderDce, ingestDocuments } from "@/lib/dce/ingest";
+import { demanderRetrait, repondreCaptcha } from "@/lib/dce/retrait";
 import { notify } from "@/lib/notifications";
 import { assertCan, PermissionError } from "@/lib/rbac";
 import { recomputeMatching } from "@/lib/matching/service";
@@ -562,8 +563,26 @@ export async function recordDecisionAction(tenderId: string, formData: FormData)
       const stage = status === "GO" ? "PREPARATION" : status === "NO_GO" ? "REJETE_NON_POURSUIVI" : "GO_NO_GO";
       await prisma.tender.update({ where: { id: tenderId }, data: { goNoGo: status, stage } });
 
+      // Le GO déclenche le retrait du dossier.
+      //
+      // C'est le moment où il devient utile : on ne retire pas les dossiers de
+      // deux cents consultations par précaution, on retire celui du marché
+      // auquel on a décidé de répondre. Et c'est le moment où il devient
+      // urgent, puisque la rédaction commence.
+      //
+      // Le retrait est une demande, pas un appel : il demande un navigateur
+      // maintenu en vie, et parfois quelqu'un pour lire une épreuve
+      // anti-robot. Un échec ne remet donc pas le GO en cause — la décision
+      // est prise, et le dossier s'importe à la main si besoin.
+      let retrait: string | null = null;
       if (status === "GO") {
         await buildResponseWorkspace(tenderId, session.id);
+        const issue = await demanderRetrait(tenderId, { userId: session.id });
+        retrait = issue.cree
+          ? " Le retrait du dossier est demandé."
+          : issue.raison
+            ? ` Retrait non demandé : ${issue.raison.toLowerCase()}`
+            : null;
       }
 
       await recordAudit({
@@ -584,9 +603,9 @@ export async function recordDecisionAction(tenderId: string, formData: FormData)
         ok: true,
         message:
           status === "GO"
-            ? chosenLots.length > 0
-              ? `GO enregistré sur ${chosenLots.length} lot(s). L'espace de préparation de la réponse a été créé.`
-              : "GO enregistré. L'espace de préparation de la réponse a été créé."
+            ? (chosenLots.length > 0
+                ? `GO enregistré sur ${chosenLots.length} lot(s). L'espace de préparation de la réponse a été créé.`
+                : "GO enregistré. L'espace de préparation de la réponse a été créé.") + (retrait ?? "")
             : status === "NO_GO"
               ? "NO GO enregistré. L'affaire est classée ; elle reste rouvrable."
               : "Décision remise à « à décider ».",
@@ -864,4 +883,54 @@ export async function archiveTenderAction(tenderId: string): Promise<void> {
   });
   refresh(tenderId);
   redirect("/pipeline");
+}
+
+// ---------------------------------------------------------------------------
+// Retrait du dossier de consultation
+// ---------------------------------------------------------------------------
+
+/**
+ * Saisie de la vérification anti-robot d'un retrait de dossier.
+ *
+ * La permission exigée est celle de l'import du dossier, pas une permission
+ * nouvelle : saisir ces quelques caractères ne décide de rien et n'engage
+ * personne, cela débloque un téléchargement que l'affaire attend déjà. Qui
+ * peut déposer le dossier à la main peut donc aussi le débloquer.
+ */
+export async function answerRetraitCaptchaAction(
+  tenderId: string,
+  formData: FormData,
+): Promise<ActionState> {
+  try {
+    return await guard("dce.upload", async (session) => {
+      const id = String(formData.get("retraitId") ?? "").trim();
+      const reponse = String(formData.get("reponse") ?? "").trim();
+      if (!id) return { ok: false, message: "Demande de retrait non identifiée." };
+
+      const issue = await repondreCaptcha(id, reponse, session.id);
+      if (!issue.ok) return { ok: false, message: issue.raison ?? "Saisie refusée." };
+
+      refresh(tenderId);
+      return {
+        ok: true,
+        message: "Saisie transmise. Le retrait se poursuit ; la page suit son avancement.",
+      };
+    });
+  } catch (error) {
+    return toState(error);
+  }
+}
+
+/** Relance un retrait abandonné ou en échec, à la demande. */
+export async function relancerRetraitAction(tenderId: string): Promise<ActionState> {
+  try {
+    return await guard("dce.upload", async (session) => {
+      const issue = await demanderRetrait(tenderId, { userId: session.id });
+      if (!issue.cree) return { ok: false, message: issue.raison ?? "Retrait non relancé." };
+      refresh(tenderId);
+      return { ok: true, message: "Retrait demandé. Le dossier sera versé dès qu'il sera obtenu." };
+    });
+  } catch (error) {
+    return toState(error);
+  }
 }

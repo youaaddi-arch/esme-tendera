@@ -67,15 +67,12 @@ export function KanbanBoard({
   /**
    * Colonnes qui ne se posent pas, parce que leur contenu n'est pas une étape.
    *
-   * « Matching » reflète l'appréciation du moteur : on n'y fait pas glisser
-   * une affaire, on corrige l'appréciation depuis la fiche. « Go » et « No Go »
-   * reflètent une décision qui exige des éléments qu'un glisser-déposer ne peut
-   * pas saisir — les lots visés dans un cas, le motif dans l'autre. Les y
-   * déposer silencieusement reviendrait à fabriquer une décision sans
-   * justification.
+   * « Go » et « No Go » reflètent une décision qui exige des éléments qu'un
+   * glisser-déposer ne peut pas saisir — les lots visés dans un cas, le motif
+   * dans l'autre. Les y déposer silencieusement reviendrait à fabriquer une
+   * décision sans justification.
    */
   const DERIVED_COLUMNS: Partial<Record<BoardColumnKey, string>> = {
-    MATCHING: "L'appréciation du matching est calculée. Pour la corriger, ouvrez la fiche, onglet Matching.",
     GO: "Un GO se prend depuis la fiche : il faut indiquer les lots sur lesquels vous vous positionnez.",
     NO_GO: "Un NO GO se prend depuis la fiche : le motif est obligatoire.",
   };
