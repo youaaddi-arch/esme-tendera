@@ -5,6 +5,8 @@ import { LinkButton, Notice, PageHeader } from "@/components/ui";
 import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/rbac";
+import type { Prisma } from "@prisma/client";
+
 import { natureLabels } from "@/lib/labels";
 
 export const metadata = { title: "Pipeline" };
@@ -28,6 +30,27 @@ function dayEnd(value?: string): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+/**
+ * Ordre de tri demandé.
+ *
+ * Les valeurs absentes sont rejetées en fin de liste dans tous les cas : une
+ * affaire sans montant publié n'est pas une affaire à zéro euro, et la faire
+ * remonter en tête d'un tri décroissant donnerait à une information manquante
+ * l'apparence d'une information.
+ */
+function ordreDeTri(tri?: string): Prisma.TenderOrderByWithRelationInput[] {
+  switch (tri) {
+    case "publication":
+      return [{ publishedAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }];
+    case "montant":
+      return [{ amountMaxEur: { sort: "desc", nulls: "last" } }, { deadlineAt: "asc" }];
+    case "score":
+      return [{ matchResult: { scoreGlobal: "desc" } }, { deadlineAt: "asc" }];
+    default:
+      return [{ deadlineAt: "asc" }, { createdAt: "desc" }];
+  }
+}
+
 /** Champ de date compact, avec sa borne en légende. */
 function DateInput({ name, label, value }: { name: string; label: string; value?: string }) {
   return (
@@ -49,7 +72,7 @@ export default async function PipelinePage({
   searchParams: Promise<{
     q?: string; responsable?: string; archivees?: string;
     publieDu?: string; publieAu?: string; limiteDu?: string; limiteAu?: string;
-    nature?: string; domaine?: string;
+    nature?: string; domaine?: string; tri?: string;
   }>;
 }) {
   const session = await requireSession();
@@ -103,7 +126,7 @@ export default async function PipelinePage({
           }
         : {}),
     },
-    orderBy: [{ deadlineAt: "asc" }, { createdAt: "desc" }],
+    orderBy: ordreDeTri(params.tri),
     select: {
       id: true, reference: true, title: true, buyer: true, consultationRef: true,
       lotLabel: true, amountKind: true, amountMinEur: true, amountMaxEur: true,
@@ -128,8 +151,14 @@ export default async function PipelinePage({
   // Une fenêtre de veille de trente jours ramène aussi des avis dont la date
   // limite est passée. Ils restent consultables, mais ne doivent pas occuper
   // le haut des colonnes : on classe d'abord ce qui est encore à jouer.
+  //
+  // Ce reclassement ne vaut que pour le tri par échéance. Demander un tri par
+  // montant et recevoir un ordre qui dépend d'abord des dates serait un tri
+  // qui ment sur ce qu'il fait : les autres tris sont donc laissés tels quels.
   const now = new Date();
-  const ordered = [...tenders].sort((a, b) => {
+  const ordered = params.tri && params.tri !== "echeance"
+    ? tenders
+    : [...tenders].sort((a, b) => {
     const rank = (deadline: Date | null) => {
       if (!deadline) return 1; // date limite inconnue : au milieu
       return deadline >= now ? 0 : 2; // ouverte, puis inconnue, puis échue
@@ -247,6 +276,20 @@ export default async function PipelinePage({
             {domains.map((domain) => (
               <option key={domain.slug} value={domain.slug}>{domain.name}</option>
             ))}
+          </select>
+        </label>
+
+        <label>
+          <span className="mb-1 block text-[12px] font-medium text-ink-700">Trier par</span>
+          <select
+            name="tri"
+            defaultValue={params.tri ?? ""}
+            className="h-9 max-w-48 rounded-lg border border-ink-300 bg-white px-2 text-sm"
+          >
+            <option value="">Date limite de dépôt</option>
+            <option value="publication">Date de publication</option>
+            <option value="montant">Montant</option>
+            <option value="score">Score de matching</option>
           </select>
         </label>
 

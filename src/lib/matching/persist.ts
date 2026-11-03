@@ -185,12 +185,24 @@ export async function persistMatching(
     });
   }
 
-  // Une affaire qui vient d'être notée quitte « AO identifiés » : cette
-  // colonne désigne ce qui n'a pas encore été évalué, pas ce qui attend une
-  // décision. Les étapes ultérieures ne sont jamais ramenées en arrière — un
-  // recalcul ne défait pas le travail déjà engagé sur le dossier.
-  if (tender.stage === "AO_IDENTIFIES") {
-    await prisma.tender.update({ where: { id: tenderId }, data: { stage: "MATCHING" } });
+  // L'étape « Matching » ne reçoit que le cœur de catalogue.
+  //
+  // Une affaire évaluée hors catalogue reste donc dans « AO identifiés » : le
+  // pipeline sert à voir ce sur quoi on travaille, et une colonne qui recevrait
+  // les neuf dixièmes du portefeuille ne montrerait rien. Les affaires écartées
+  // restent accessibles par le filtre d'appréciation, qui laisse choisir ce
+  // qu'on veut regarder.
+  //
+  // Le déplacement joue dans les deux sens, mais uniquement entre ces deux
+  // étapes : un recalcul qui déclasse une affaire la ramène dans « AO
+  // identifiés », et aucune étape ultérieure n'est jamais ramenée en arrière —
+  // le travail déjà engagé sur un dossier n'est pas défait par un recalcul.
+  const triage = tender.stage === "AO_IDENTIFIES" || tender.stage === "MATCHING";
+  if (triage) {
+    const voulue = outcome.nature === "FORMATION_CATALOGUE" ? "MATCHING" : "AO_IDENTIFIES";
+    if (voulue !== tender.stage) {
+      await prisma.tender.update({ where: { id: tenderId }, data: { stage: voulue } });
+    }
   }
 
 

@@ -8,6 +8,7 @@ import { recordAudit } from "../audit";
 import { notify, refreshDeadlineReminders } from "../notifications";
 import { recomputeMatching } from "../matching/service";
 import { boampConnector } from "./boamp";
+import { tedConnector } from "./ted";
 import { ConnectorUnavailableError, type Connector, type NormalizedNotice } from "./types";
 
 /**
@@ -25,6 +26,7 @@ import { ConnectorUnavailableError, type Connector, type NormalizedNotice } from
 
 const CONNECTORS: Record<string, Connector> = {
   boamp: boampConnector,
+  ted: tedConnector,
 };
 
 export type RunOutcome = {

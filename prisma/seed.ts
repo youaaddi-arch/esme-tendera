@@ -195,6 +195,20 @@ async function seedIonis() {
 
 async function seedConnectors() {
   for (const connector of connectorRegistry) {
+    const existant = await prisma.sourceConnector.findUnique({
+      where: { key: connector.key },
+      select: { status: true },
+    });
+
+    // Un connecteur jamais implémenté n'avait pas d'état choisi : son
+    // « désactivé » découlait de l'absence de code, pas d'une décision
+    // d'exploitation. Le jour où il devient opérationnel, il reprend donc sa
+    // valeur par défaut et sa configuration.
+    //
+    // Sans cette règle, brancher une source la laisse silencieusement
+    // inactive en base : la synchronisation la saute, et rien ne le signale.
+    const miseEnService = existant?.status === "A_IMPLEMENTER" && connector.status === "OPERATIONNEL";
+
     await prisma.sourceConnector.upsert({
       where: { key: connector.key },
       create: {
@@ -204,11 +218,19 @@ async function seedConnectors() {
         config: (connector.defaultConfig ?? {}) as Prisma.InputJsonValue,
       },
       // Le statut déclaré par le code fait foi : si un connecteur passe de
-      // « à implémenter » à « opérationnel », la base suit.
+      // « à implémenter » à « opérationnel », la base suit. En revanche
+      // l'activation reste le choix de l'exploitant, sauf à la mise en
+      // service, où ce choix n'avait jamais été fait.
       update: {
         name: connector.name, baseUrl: connector.baseUrl,
         description: connector.description, status: connector.status,
         requirement: connector.requirement,
+        ...(miseEnService
+          ? {
+              enabled: connector.enabledByDefault,
+              config: (connector.defaultConfig ?? {}) as Prisma.InputJsonValue,
+            }
+          : {}),
       },
     });
   }
