@@ -382,6 +382,8 @@ model Tender {
   dceStatus        DceStatus @default(NON_TENTE)
   dceFailureReason String?
   dceSourceUrl     String?
+  /// Adresse de remise des plis, distincte de celle du dossier.
+  depotUrl         String?
 
   ownerId String?
   owner   User?   @relation("TenderOwner", fields: [ownerId], references: [id], onDelete: SetNull)
