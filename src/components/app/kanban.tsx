@@ -32,6 +32,8 @@ export type KanbanCard = {
   isDemo: boolean;
   ownerName: string | null;
   scoreGlobal: number | null;
+  /** 1 catalogue, 2 voisine, 3 IONIS. */
+  rang: number | null;
   nature: string | null;
   domain: string | null;
   lotCount: number;
@@ -257,7 +259,9 @@ function TenderCard({
     >
       <div className="flex items-start justify-between gap-2">
         <span className="font-mono text-[10px] uppercase tracking-wide text-ink-400">{card.reference}</span>
-        {card.scoreGlobal !== null ? <ScorePill value={card.scoreGlobal} size="sm" /> : null}
+        {card.scoreGlobal !== null ? (
+          <ScorePill value={card.scoreGlobal} size="sm" rang={card.rang} />
+        ) : null}
       </div>
 
       <Link href={`/affaires/${card.id}`} className="mt-1 block">

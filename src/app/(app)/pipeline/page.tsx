@@ -136,7 +136,7 @@ export default async function PipelinePage({
       // Le domaine est lu sur le résultat lui-même plutôt que par une
       // sous-requête sur la meilleure fiche : c'est la même valeur que celle
       // sur laquelle porte le filtre, et cela évite une jointure par affaire.
-      matchResult: { select: { scoreGlobal: true, nature: true, topDomainName: true } },
+      matchResult: { select: { scoreGlobal: true, rang: true, nature: true, topDomainName: true } },
       _count: { select: { lots: true, documents: true } },
     },
     }),
@@ -192,6 +192,7 @@ export default async function PipelinePage({
     isDemo: tender.isDemo,
     ownerName: tender.owner?.name ?? null,
     scoreGlobal: tender.matchResult?.scoreGlobal ?? null,
+    rang: tender.matchResult?.rang ?? null,
     nature: tender.matchResult?.nature ?? null,
     domain: tender.matchResult?.topDomainName ?? null,
     lotCount: tender._count.lots,

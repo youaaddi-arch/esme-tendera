@@ -160,14 +160,53 @@ export function Badge({
 }
 
 /** Pastille de score : la couleur double un chiffre, elle ne le remplace jamais. */
-export function ScorePill({ value, label, size = "md" }: { value: number; label?: string; size?: "sm" | "md" }) {
+/**
+ * Rang de la correspondance, en clair.
+ *
+ * Le pourcentage dit combien le besoin est couvert ; le rang dit par quoi.
+ * Montrer le nombre seul laissait croire qu'une couverture de soixante-dix
+ * pour cent par une école du groupe valait une couverture de soixante-dix
+ * pour cent par notre propre catalogue — alors qu'elle n'appelle pas la même
+ * décision ni les mêmes démarches.
+ */
+const RANGS: Record<number, { court: string; long: string }> = {
+  1: { court: "catalogue", long: "Couvert par le catalogue ESME" },
+  2: { court: "voisine", long: "Couvert par une formation voisine, à adapter" },
+  3: { court: "IONIS", long: "Couvert par une école du groupe IONIS" },
+};
+
+export function ScorePill({
+  value,
+  label,
+  size = "md",
+  rang,
+}: {
+  value: number;
+  label?: string;
+  size?: "sm" | "md";
+  /** 1 catalogue, 2 voisine, 3 IONIS. Omis quand aucune famille ne couvre. */
+  rang?: number | null;
+}) {
   const tone: BadgeTone = value >= 70 ? "ok" : value >= 45 ? "warn" : "neutral";
+  const detail = rang ? RANGS[rang] : null;
   return (
-    <Badge tone={tone} className={cx("tabular-nums", size === "sm" ? "text-[11px]" : "text-xs")}>
-      {label ? <span className="font-normal opacity-80">{label}</span> : null}
-      <span className="font-semibold">{Math.round(value)}</span>
-      <span className="opacity-60">/100</span>
-    </Badge>
+    <span className="inline-flex items-center gap-1">
+      <Badge tone={tone} className={cx("tabular-nums", size === "sm" ? "text-[11px]" : "text-xs")}>
+        {label ? <span className="font-normal opacity-80">{label}</span> : null}
+        <span className="font-semibold">{Math.round(value)}</span>
+        <span className="opacity-60">/100</span>
+      </Badge>
+      {detail ? (
+        <Badge
+          tone="neutral"
+          className={cx("font-normal", size === "sm" ? "text-[10px]" : "text-[11px]")}
+          title={detail.long}
+        >
+          <span className="opacity-60">rang {rang}</span>
+          <span className="ml-1">{detail.court}</span>
+        </Badge>
+      ) : null}
+    </span>
   );
 }
 
