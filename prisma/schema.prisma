@@ -779,6 +779,19 @@ model MatchResult {
   /// Appréciation en clair, affichée sur l'affaire.
   natureLabel      String?
 
+  /**
+   * Rang de la correspondance : par quelle famille le besoin est couvert.
+   *
+   *   1 — catalogue ESME
+   *   2 — formation voisine, à adapter
+   *   3 — école du groupe IONIS
+   *
+   * Nul quand aucune famille ne couvre le besoin. Le rang et le pourcentage
+   * répondent à deux questions distinctes — par quoi, et combien — qu'un seul
+   * nombre rendait indiscernables.
+   */
+  rang Int?
+
   /// Score A — adéquation au catalogue ESME, sur 100.
   scoreCatalogue Float @default(0)
   /// Score B — formations voisines / sur mesure, sur 100.

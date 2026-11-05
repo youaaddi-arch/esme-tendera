@@ -343,7 +343,18 @@ describe("moteur de matching", () => {
     assert.ok(outcome.scoreIonis > 0);
   });
 
-  it("respecte la pondération configurée", () => {
+  /**
+   * Ce test vérifiait l'inverse : que le pourcentage suivait la pondération.
+   * Il a été réécrit, et non supprimé, parce que c'est la règle qui a changé
+   * et non le code qui a régressé.
+   *
+   * Le pourcentage est désormais la couverture réelle de la famille la mieux
+   * placée, et le rang dit laquelle. La préférence entre familles est donc
+   * énoncée — rang 1, 2 ou 3 — au lieu d'être enfouie dans un coefficient qui
+   * rendait indiscernables « bien couvert par le groupe » et « moyennement
+   * couvert par notre catalogue ».
+   */
+  it("le pourcentage ne dépend pas de la pondération, le rang porte la préférence", () => {
     const input = {
       title: "Formation à la cybersécurité des agents",
       objectSummary: "Sensibilisation de 400 agents et parcours technique pour 40 informaticiens.",
@@ -351,9 +362,50 @@ describe("moteur de matching", () => {
     const base = runMatching(input, referential, WEIGHTS);
     const ionisHeavy = runMatching(input, referential, { catalogue: 10, voisines: 10, ionis: 80 });
 
-    assert.equal(base.scoreCatalogue, ionisHeavy.scoreCatalogue, "les scores par famille ne doivent pas dépendre de la pondération");
-    assert.notEqual(base.scoreGlobal, ionisHeavy.scoreGlobal, "le score global doit suivre la pondération");
+    assert.equal(
+      base.scoreCatalogue,
+      ionisHeavy.scoreCatalogue,
+      "les scores par famille ne doivent pas dépendre de la pondération",
+    );
+    assert.equal(
+      base.scoreGlobal,
+      ionisHeavy.scoreGlobal,
+      "le pourcentage mesure une couverture : il ne doit pas bouger avec un réglage de préférence",
+    );
+    assert.equal(base.rang, ionisHeavy.rang, "le rang non plus : il désigne la famille la mieux placée");
+    // La pondération reste enregistrée, pour pouvoir relire une appréciation
+    // avec les réglages du jour où elle a été calculée.
     assert.equal(Math.round(ionisHeavy.weights.ionis), 80);
+  });
+
+  it("le pourcentage est la couverture de la famille la mieux placée, et le rang la nomme", () => {
+    const outcome = runMatching(
+      {
+        title: "Formation à la cybersécurité des agents",
+        objectSummary: "Sensibilisation de 400 agents et parcours technique pour 40 informaticiens.",
+      },
+      referential,
+      WEIGHTS,
+    );
+    const meilleure = Math.max(outcome.scoreCatalogue, outcome.scoreVoisines, outcome.scoreIonis);
+    assert.equal(outcome.scoreGlobal, Math.round(meilleure));
+
+    const attendu =
+      meilleure === outcome.scoreCatalogue ? 1 : meilleure === outcome.scoreVoisines ? 2 : 3;
+    assert.equal(outcome.rang, attendu, "le rang doit désigner la famille qui fournit le pourcentage");
+  });
+
+  /**
+   * Annoncer un rang, c'est annoncer une ressource mobilisable. Quand aucune
+   * famille ne couvre le besoin, il n'y a pas de ressource à nommer.
+   */
+  it("aucun rang n'est annoncé quand aucune famille ne couvre le besoin", () => {
+    const outcome = runMatching(
+      { title: "Fourniture de bitume routier", objectSummary: "Livraison d'enrobés." },
+      referential,
+      WEIGHTS,
+    );
+    assert.equal(outcome.rang, null);
   });
 
   it("normalise une pondération qui ne totalise pas 100", () => {
