@@ -23,8 +23,22 @@ import { demanderRetrait } from "./dce/retrait";
 
 export type DecisionInput = {
   status: GoNoGoStatus;
-  /** Motivation en clair : elle engage l'équipe et reste au journal. */
-  rationale: string;
+  /**
+   * Motivation en clair.
+   *
+   * Exigée pour un GO, qui engage de la charge de travail : quelqu'un va
+   * rédiger, chiffrer, et devra savoir pourquoi.
+   *
+   * Facultative pour un NO GO, et c'est un choix assumé. L'exiger n'a pas
+   * produit de meilleures décisions : elle a produit des motivations vides
+   * (« pas pour nous »), et surtout elle a empêché d'écarter vite les avis
+   * qu'un coup d'œil suffit à écarter. Une veille qui ramène deux cents avis
+   * par semaine se trie au rythme de la lecture, pas de la rédaction. Ce qui
+   * reste garanti ne change pas : qui a décidé, quand, et que la décision est
+   * rouvrable.
+   */
+  rationale?: string | null;
+  /** Motif catalogué du NO GO. Facultatif : on peut écarter sans classer. */
   reason?: NoGoReason | null;
   /** Lots visés par un GO. Obligatoires dès que la consultation est allotie. */
   lotIds?: string[];
@@ -70,23 +84,20 @@ export async function recordDecision(
   input: DecisionInput,
 ): Promise<DecisionOutcome> {
   const { status, userId } = input;
-  const rationale = input.rationale.trim();
+  const rationale = (input.rationale ?? "").trim();
   const reason = input.reason ?? null;
   const selectedLotIds = input.lotIds ?? [];
 
   if (!["GO", "NO_GO", "A_DECIDER"].includes(status)) {
     return { ok: false, message: "Décision invalide." };
   }
-  if (status === "NO_GO" && !reason) {
-    return { ok: false, message: "Un NO GO doit porter un motif." };
-  }
-  if (!rationale) {
-    return { ok: false, message: "Motivez la décision : elle engage l'équipe et reste au journal." };
-  }
-  // « Autre » ne dit rien à lui seul : c'est précisément le cas où le texte
-  // libre porte toute l'information.
-  if (status === "NO_GO" && reason === "AUTRE" && rationale.length < 15) {
-    return { ok: false, message: "Motif « Autre » : précisez-le en toutes lettres dans la motivation." };
+  // Le GO reste motivé : il ouvre un chantier, et celui qui rédigera doit
+  // pouvoir lire pourquoi. Le NO GO ne l'est plus — voir `rationale`.
+  if (status === "GO" && !rationale) {
+    return {
+      ok: false,
+      message: "Motivez le GO : il ouvre la préparation de la réponse et engage l'équipe.",
+    };
   }
 
   const lots = await prisma.lot.findMany({
@@ -116,11 +127,17 @@ export async function recordDecision(
 
   // La dérogation est inscrite dans la motivation, pas seulement dans un
   // champ : c'est le texte que lira celui qui rédige la réponse.
+  // Un NO GO sans motivation en porte une tout de même : « sans motif » est
+  // une information, et l'historique ne doit pas afficher une ligne vide là
+  // où une décision a été prise.
   const motivation =
     status === "GO" && sansLots && retenus.length === 0 && lots.length > 0
       ? `${rationale}\n\n[GO posé sans désigner de lot, sur décision explicite. Cette consultation ` +
         `comporte ${lots.length} lot(s) : les lots visés restent à préciser avant la rédaction.]`
-      : rationale;
+      : rationale ||
+        (status === "NO_GO"
+          ? "NO GO posé sans motif renseigné."
+          : "Décision remise à « à décider », sans commentaire.");
 
   await prisma.decision.updateMany({ where: { tenderId, superseded: false }, data: { superseded: true } });
   await prisma.decision.create({

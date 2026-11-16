@@ -32,10 +32,22 @@ export type TenderManuelInput = {
   publishedAt?: Date | null;
   sourceUrl?: string | null;
   dceSourceUrl?: string | null;
+  /** Adresse de remise des plis, distincte de celle du dossier. */
+  depotUrl?: string | null;
+  /**
+   * Identifiant de l'avis chez sa source, quand on le connaît.
+   *
+   * Ce n'est pas une coquetterie : c'est lui qui empêchera la veille de
+   * recréer demain une fiche pour le même avis. Une affaire saisie à partir
+   * d'un lien BOAMP sans son identifiant reviendra en double.
+   */
+  sourceNoticeId?: string | null;
   region?: string | null;
   cpvCodes?: string[];
   amountKind?: "ESTIME" | "MAXIMUM" | "PAR_LOT" | "GLOBAL" | "NON_COMMUNIQUE";
   amountMaxEur?: number | null;
+  /** Précision sur le montant, en clair : d'où il vient, ce qu'il couvre. */
+  amountNote?: string | null;
   /** Qui saisit. Obligatoire : une fiche manuelle a un auteur. */
   userId: string;
   /** D'où vient l'information, en clair, pour la trace. */
@@ -60,12 +72,15 @@ export async function createManualTender(
       publishedAt: input.publishedAt ?? null,
       sourceUrl: input.sourceUrl?.trim() || null,
       dceSourceUrl: input.dceSourceUrl?.trim() || null,
+      depotUrl: input.depotUrl?.trim() || null,
+      sourceNoticeId: input.sourceNoticeId?.trim() || null,
       region: input.region?.trim() || null,
       cpvCodes: input.cpvCodes ?? [],
       // « Non communiqué » par défaut, et non zéro : une absence de montant
       // n'est pas un montant nul.
       amountKind: input.amountKind ?? "NON_COMMUNIQUE",
       amountMaxEur: input.amountMaxEur ?? null,
+      amountNote: input.amountNote?.trim() || null,
       sourceConnectorId: connector?.id ?? null,
       ownerId: input.userId,
       stage: "AO_IDENTIFIES",

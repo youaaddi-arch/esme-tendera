@@ -182,12 +182,14 @@ export function DecisionTab({ tender, permissions }: { tender: TenderDetail; per
                   ) : null}
 
                   {status === "NO_GO" ? (
-                    <Field label="Motif du NO GO" required hint="Obligatoire, même lorsque l'affaire correspond au catalogue.">
+                    <Field
+                      label="Motif du NO GO"
+                      hint="Facultatif. Renseigné, il alimente les statistiques de refus ; laissé vide, la décision est enregistrée quand même."
+                    >
                       <Select
                         name="reason"
                         value={reason}
                         onChange={(event) => setReason(event.target.value)}
-                        required
                       >
                         <option value="">— Choisir un motif —</option>
                         {Object.entries(noGoReasonLabels).map(([value, label]) => (
@@ -199,20 +201,22 @@ export function DecisionTab({ tender, permissions }: { tender: TenderDetail; per
 
                   <Field
                     label="Motivation"
-                    required
+                    required={status === "GO"}
                     hint={
-                      status === "NO_GO" && reason === "AUTRE"
-                        ? "Motif « Autre » : décrivez-le ici, c'est la seule trace qui restera."
+                      status === "NO_GO"
+                        ? reason === "AUTRE"
+                          ? "Motif « Autre » : c'est ici qu'il se décrit, sinon rien n'en restera."
+                          : "Facultative pour un NO GO. Le journal retient de toute façon qui a décidé et quand."
                         : "Conservée au journal d'audit."
                     }
                   >
                     <Textarea
                       name="rationale"
                       rows={4}
-                      required
+                      required={status === "GO"}
                       placeholder={
                         status === "NO_GO"
-                          ? "Ce qui écarte cette consultation."
+                          ? "Ce qui écarte cette consultation — facultatif."
                           : "Ce qui justifie la décision."
                       }
                     />
@@ -228,7 +232,8 @@ export function DecisionTab({ tender, permissions }: { tender: TenderDetail; per
         <Notice tone="info" title="Ce qui se passe ensuite">
           Un <strong>GO</strong> fait passer l&apos;affaire en préparation et génère l&apos;espace de réponse :
           checklist, planning, plan et premier jet du mémoire. Un <strong>NO GO</strong> classe
-          l&apos;affaire dans les opportunités non poursuivies, avec son motif — elle reste rouvrable.
+          l&apos;affaire dans les opportunités non poursuivies — avec son motif s&apos;il a été renseigné,
+          et elle reste rouvrable dans tous les cas.
         </Notice>
       </div>
     </div>

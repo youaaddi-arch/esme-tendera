@@ -89,3 +89,31 @@ test("un identifiant BOAMP est laissé intact", () => {
   assert.equal(clefIdentifiant("26-92262"), "26-92262");
   assert.equal(clefIdentifiant("26-103940"), "26-103940");
 });
+
+test("un lien direct vers le BOAMP livre son identifiant", () => {
+  assert.deepEqual(identifiantDepuisLien("https://www.boamp.fr/avis/detail/26-94667"), {
+    source: "BOAMP",
+    identifiant: "26-94667",
+  });
+  // Forme encodée du paramètre de recherche : idweb:"26-94667".
+  assert.deepEqual(
+    identifiantDepuisLien('https://www.boamp.fr/pages/avis-detail/?q=idweb%3A%2226-94667%22'),
+    { source: "BOAMP", identifiant: "26-94667" },
+  );
+});
+
+test("un lien direct vers TED livre son numéro d'avis", () => {
+  assert.deepEqual(identifiantDepuisLien("https://ted.europa.eu/fr/notice/-/detail/725368-2026"), {
+    source: "TED",
+    identifiant: "725368-2026",
+  });
+});
+
+test("un lien quelconque ne produit pas d'identifiant inventé", () => {
+  assert.equal(
+    identifiantDepuisLien("https://www.marches-publics.gouv.fr/?page=Entreprise&id=3084259"),
+    null,
+  );
+  assert.equal(identifiantDepuisLien("https://exemple.fr/un-marche-2026"), null);
+  assert.equal(identifiantDepuisLien(""), null);
+});
