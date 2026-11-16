@@ -107,7 +107,11 @@ export default async function TenderPage({
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {tender.matchResult ? (
-                <ScorePill value={tender.matchResult.scoreGlobal} label="Score global" />
+                <ScorePill
+                  value={tender.matchResult.scoreGlobal}
+                  label="Matching"
+                  rang={tender.matchResult.rang}
+                />
               ) : null}
               <Badge tone="esme">{stageLabels[tender.stage]}</Badge>
               <Badge

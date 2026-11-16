@@ -8,6 +8,9 @@ import { prisma } from "@/lib/db";
 import { assertCan, PermissionError } from "@/lib/rbac";
 import { setSetting } from "@/lib/settings";
 import { runConnector } from "@/lib/veille/run";
+import {
+  importerTableau, type RapportImport, type RepriseDecisions,
+} from "@/lib/veille/import-tableau";
 import type { ActionState } from "@/app/(app)/affaires/[id]/actions";
 
 function fail(error: unknown): ActionState {
@@ -115,5 +118,76 @@ export async function updateVeilleSettingsAction(formData: FormData): Promise<Ac
     return { ok: true, message: "Paramètres enregistrés." };
   } catch (error) {
     return fail(error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Import d'un tableau de veille
+// ---------------------------------------------------------------------------
+
+export type ImportState = {
+  ok: boolean;
+  message: string;
+  /** Compte rendu ligne à ligne, présent même en cas d'échec partiel. */
+  rapport?: RapportImport;
+};
+
+/**
+ * Import d'un classeur de veille.
+ *
+ * Deux passes volontairement distinctes : on analyse, on lit le compte rendu,
+ * puis on crée. Le fichier est renvoyé la seconde fois, et c'est le prix à
+ * payer pour ne rien conserver entre les deux — un fichier déposé en attente
+ * quelque part sur un serveur est un fichier qu'il faut ensuite savoir
+ * effacer.
+ */
+export async function importerTableauAction(
+  _etat: ImportState | null,
+  formData: FormData,
+): Promise<ImportState> {
+  try {
+    const session = await requireSession();
+    assertCan(session.role, "tender.create");
+
+    const fichier = formData.get("fichier");
+    if (!(fichier instanceof File) || fichier.size === 0) {
+      return { ok: false, message: "Choisissez un fichier .xlsx, .xls, .ods ou .csv." };
+    }
+
+    const reprise = String(formData.get("reprise") ?? "aucune") as RepriseDecisions;
+    const issue = await importerTableau({
+      nom: fichier.name,
+      octets: Buffer.from(await fichier.arrayBuffer()),
+      appliquer: formData.get("appliquer") === "1",
+      reprise: ["aucune", "no-go", "toutes"].includes(reprise) ? reprise : "aucune",
+      userId: session.id,
+    });
+
+    if ("erreur" in issue) return { ok: false, message: issue.erreur };
+
+    if (issue.applique) {
+      revalidatePath("/veille");
+      revalidatePath("/pipeline");
+      revalidatePath("/affaires");
+      revalidatePath("/");
+    }
+
+    const { compte } = issue;
+    const message = issue.applique
+      ? `${compte.creees} affaire(s) créée(s) sur ${compte.total} ligne(s).` +
+        (compte.dejaPresentes > 0 ? ` ${compte.dejaPresentes} déjà présente(s).` : "") +
+        (compte.decisions > 0 ? ` ${compte.decisions} décision(s) reprise(s).` : "") +
+        (compte.nonTraitees > 0
+          ? ` ${compte.nonTraitees} ligne(s) non traitée(s) faute de temps : réimportez le même fichier.`
+          : "")
+      : `Aperçu : ${compte.creees} affaire(s) seraient créées sur ${compte.total} ligne(s) lues.` +
+        (compte.dejaPresentes > 0 ? ` ${compte.dejaPresentes} sont déjà suivies.` : "") +
+        (compte.incompletes > 0 ? ` ${compte.incompletes} ligne(s) sont incomplètes.` : "") +
+        " Rien n'a été écrit.";
+
+    return { ok: true, message, rapport: issue };
+  } catch (error) {
+    const etat = fail(error);
+    return { ok: etat?.ok === true, message: etat?.message ?? "L'import a échoué." };
   }
 }

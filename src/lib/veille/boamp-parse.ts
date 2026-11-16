@@ -1,4 +1,5 @@
 import type { AmountKind } from "@prisma/client";
+import { analyserAdresses, analyserMontant } from "./avis";
 
 import type { FetchOptions, NormalizedNotice } from "./types";
 
@@ -329,7 +330,11 @@ export function normalizeBoampRecord(record: OdsRecord): NormalizedNotice | null
   const deadline =
     parseDate(first(record, ["datelimitereponse"])) ?? extractDeadlineFromDonnees(donnees);
 
-  const amount = extractAmountFromDonnees(donnees);
+  // L'analyseur d'avis remplace l'ancienne extraction : il lit le champ qui
+  // porte le montant plutôt que le premier mot qui ressemble à un montant,
+  // et il en garde la provenance.
+  const amount = analyserMontant(donnees);
+  const adresses = analyserAdresses(donnees);
   const cpvCodes = extractCpvFromDonnees(donnees);
   const lots = extractLotsFromDonnees(donnees);
   const rectificatif = isRectificatif(record);
@@ -360,7 +365,12 @@ export function normalizeBoampRecord(record: OdsRecord): NormalizedNotice | null
     sourceUrl: first(record, ["url_avis"]) ?? `https://www.boamp.fr/pages/avis/?q=idweb:${id}`,
     // Le BOAMP ne publie pas de lien direct vers le dossier de consultation :
     // il faut passer par le profil d'acheteur, souvent nominatif.
-    dceUrl: null,
+    // Le dossier, et à défaut le profil d'acheteur, qui mène au moins à la
+    // consultation. Valait « null » en dur : d'où zéro adresse de retrait sur
+    // soixante et onze avis, et des décisions GO qui annonçaient à tort que
+    // l'acheteur n'en publiait pas.
+    dceUrl: adresses.dossier ?? adresses.profil,
+    depotUrl: adresses.depot,
     lots,
     rectifiesNoticeId: rectifies,
     noticeType: first(record, ["nature_libelle", "nature", "etat"]),

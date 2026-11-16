@@ -7,7 +7,7 @@ import { AlertCircle, FileText, Layers, Paperclip, User } from "lucide-react";
 import type { PipelineStage } from "@prisma/client";
 
 import { Badge, Notice, ScorePill, cx } from "@/components/ui";
-import { moveTenderAction } from "@/app/(app)/pipeline/actions";
+import { moveTenderAction, noGoAction } from "@/app/(app)/pipeline/actions";
 import {
   allowedTransitions, boardColumnHints, boardColumnLabels, boardColumnOf, boardColumnOrder,
   boardColumnStage, dceStatusLabels, formatAmount, formatDeadline, goNoGoLabels,
@@ -32,6 +32,8 @@ export type KanbanCard = {
   isDemo: boolean;
   ownerName: string | null;
   scoreGlobal: number | null;
+  /** 1 catalogue, 2 voisine, 3 IONIS. */
+  rang: number | null;
   nature: string | null;
   domain: string | null;
   lotCount: number;
@@ -51,13 +53,22 @@ export function KanbanBoard({
   const [hoverColumn, setHoverColumn] = useState<BoardColumnKey | null>(null);
   const [message, setMessage] = useState<{ tone: "danger" | "ok"; text: string } | null>(null);
   // Déplacement optimiste : la carte bouge tout de suite, et revient si le
-  // serveur refuse la transition.
-  const [optimistic, setOptimistic] = useState<Record<string, PipelineStage>>({});
+  // serveur refuse.
+  //
+  // C'est la colonne visée qui est mémorisée, et non l'étape, parce que les
+  // deux ne se déduisent plus l'une de l'autre : « No Go » et « Abandonnées
+  // sans décision » rangent l'affaire à la même étape et restent deux
+  // colonnes distinctes. Mémoriser l'étape faisait atterrir une carte lâchée
+  // sur « No Go » dans la colonne voisine, le temps d'un aller-retour serveur.
+  const [optimistic, setOptimistic] = useState<Record<string, BoardColumnKey>>({});
 
-  const effectiveStage = (card: KanbanCard): PipelineStage => optimistic[card.id] ?? card.stage;
+  const effectiveStage = (card: KanbanCard): PipelineStage => {
+    const column = optimistic[card.id];
+    return column ? boardColumnStage[column] : card.stage;
+  };
 
   const effectiveColumn = (card: KanbanCard): BoardColumnKey =>
-    boardColumnOf({ stage: effectiveStage(card), goNoGo: card.goNoGo as never });
+    optimistic[card.id] ?? boardColumnOf({ stage: card.stage, goNoGo: card.goNoGo as never });
 
   const columns = boardColumnOrder.map((column) => ({
     column,
@@ -65,20 +76,22 @@ export function KanbanBoard({
   }));
 
   /**
-   * Colonnes qui ne se posent pas, parce que leur contenu n'est pas une étape.
+   * Avertissements affichés sur une colonne pendant le glissement.
    *
-   * « No Go » reflète une décision qui exige un motif, qu'un glisser-déposer
-   * ne peut pas saisir. Y déposer une affaire reviendrait à fabriquer une
-   * décision sans justification. Pour sortir une affaire sans trancher, la
-   * colonne « Abandonnées sans décision » est là, et elle dit ce qu'elle est.
+   * « No Go » accepte le dépôt, et c'est une correction. La colonne le
+   * refusait au motif que la décision exige un motif ; le motif n'est plus
+   * exigé, et le refus ne protégeait plus rien — il rendait seulement la
+   * colonne inerte, visible mais inatteignable, si bien qu'on la croyait
+   * absente. Lâcher une carte ici enregistre un NO GO au nom de qui l'a
+   * lâchée, sans motif, et la fiche permet de le compléter ou de rouvrir.
    */
-  const DERIVED_COLUMNS: Partial<Record<BoardColumnKey, string>> = {
-    NO_GO: "Un NO GO se prend depuis la fiche : le motif est obligatoire.",
+  const DROP_WARNINGS: Partial<Record<BoardColumnKey, string>> = {
+    NO_GO: "Enregistre un NO GO sans motif, à votre nom. Complétez-le ou rouvrez depuis la fiche.",
   };
 
   const canDrop = (column: BoardColumnKey) => {
     if (!dragged || !canMove) return false;
-    if (DERIVED_COLUMNS[column]) return false;
+    if (effectiveColumn(dragged) === column) return false;
     const from = effectiveStage(dragged);
     const to = boardColumnStage[column];
     return from === to || (allowedTransitions[from] ?? []).includes(to);
@@ -90,20 +103,17 @@ export function KanbanBoard({
     setHoverColumn(null);
     if (!card) return;
 
-    const refusal = DERIVED_COLUMNS[column];
-    if (refusal) {
-      setMessage({ tone: "danger", text: refusal });
-      return;
-    }
-
     const target = boardColumnStage[column];
-    if (effectiveStage(card) === target) return;
+    if (effectiveColumn(card) === column) return;
 
-    setOptimistic((current) => ({ ...current, [card.id]: target }));
+    setOptimistic((current) => ({ ...current, [card.id]: column }));
     setMessage(null);
 
     startTransition(async () => {
-      const result = await moveTenderAction(card.id, target);
+      // Deux colonnes mènent à la même étape : l'une enregistre une décision,
+      // l'autre range l'affaire. Le serveur fait la différence, pas l'interface.
+      const result =
+        column === "NO_GO" ? await noGoAction(card.id) : await moveTenderAction(card.id, target);
       if (!result.ok) {
         setOptimistic((current) => {
           const next = { ...current };
@@ -115,7 +125,10 @@ export function KanbanBoard({
       }
       setMessage({
         tone: "ok",
-        text: `${card.reference} déplacée vers « ${boardColumnLabels[column]} ».`,
+        text:
+          column === "NO_GO"
+            ? `${card.reference} : NO GO enregistré, sans motif. Elle reste rouvrable depuis la fiche.`
+            : `${card.reference} déplacée vers « ${boardColumnLabels[column]} ».`,
       });
       router.refresh();
     });
@@ -182,9 +195,9 @@ export function KanbanBoard({
                   ) : null}
                 </header>
 
-                {DERIVED_COLUMNS[column] && dragged ? (
-                  <p className="border-b border-ink-200 bg-ink-100 px-3 py-1.5 text-[11px] leading-snug text-ink-600">
-                    {DERIVED_COLUMNS[column]}
+                {DROP_WARNINGS[column] && dragged && droppable ? (
+                  <p className="border-b border-ink-200 bg-warn-50 px-3 py-1.5 text-[11px] leading-snug text-warn-700">
+                    {DROP_WARNINGS[column]}
                   </p>
                 ) : transitionGuards[stage] && dragged && droppable && effectiveStage(dragged) !== stage ? (
                   <p className="border-b border-ink-200 bg-warn-50 px-3 py-1.5 text-[11px] leading-snug text-warn-700">
@@ -257,7 +270,9 @@ function TenderCard({
     >
       <div className="flex items-start justify-between gap-2">
         <span className="font-mono text-[10px] uppercase tracking-wide text-ink-400">{card.reference}</span>
-        {card.scoreGlobal !== null ? <ScorePill value={card.scoreGlobal} size="sm" /> : null}
+        {card.scoreGlobal !== null ? (
+          <ScorePill value={card.scoreGlobal} size="sm" rang={card.rang} />
+        ) : null}
       </div>
 
       <Link href={`/affaires/${card.id}`} className="mt-1 block">

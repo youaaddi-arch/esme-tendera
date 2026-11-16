@@ -502,10 +502,10 @@ export async function clearOverrideAction(tenderId: string): Promise<ActionState
 export async function recordDecisionAction(tenderId: string, formData: FormData): Promise<ActionState> {
   try {
     return await guard("decision.record", async (session) => {
-      // Les règles de la décision — motif obligatoire, lots d'un accord-cadre
-      // alloti, ouverture de l'espace de réponse, demande de retrait du
-      // dossier — vivent dans `recordDecision`, parce que la reprise d'un tri
-      // fait ailleurs doit obéir aux mêmes.
+      // Les règles de la décision — motivation exigée pour un GO et non pour
+      // un NO GO, lots d'un accord-cadre alloti, ouverture de l'espace de
+      // réponse, demande de retrait du dossier — vivent dans `recordDecision`,
+      // parce que la reprise d'un tri fait ailleurs doit obéir aux mêmes.
       const issue = await recordDecision(tenderId, {
         status: String(formData.get("status") ?? "") as GoNoGoStatus,
         rationale: String(formData.get("rationale") ?? ""),

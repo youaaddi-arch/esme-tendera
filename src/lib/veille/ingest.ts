@@ -139,6 +139,7 @@ export async function ingestNotice(notice: NormalizedNotice, connector: SourceCo
       sourceNoticeId: notice.sourceNoticeId,
       sourceUrl: notice.sourceUrl ?? null,
       dceSourceUrl: notice.dceUrl ?? null,
+      depotUrl: notice.depotUrl ?? null,
       // La récupération automatique du DCE n'est pas tentée ici : elle dépend
       // de l'accès au profil d'acheteur, souvent nominatif.
       dceStatus: "NON_TENTE",

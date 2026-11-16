@@ -27,6 +27,14 @@ export type NormalizedNotice = {
   sourceUrl?: string | null;
   /** Lien direct vers le dossier de consultation, quand la source le publie. */
   dceUrl?: string | null;
+  /**
+   * Adresse de remise des plis.
+   *
+   * Distincte de celle du dossier, et à ne pas confondre : l'une sert à
+   * retirer les pièces, l'autre à déposer l'offre. Les mélanger enverrait un
+   * retrait automatique dans le parcours de dépôt.
+   */
+  depotUrl?: string | null;
   lots: {
     number: string;
     title: string;

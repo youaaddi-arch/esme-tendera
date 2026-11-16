@@ -83,7 +83,26 @@ export type TenderNature =
   | "FORMATION_METIER_MANUEL"
   | "HORS_CHAMP";
 
+/**
+ * Rang de la correspondance : par quelle famille le besoin est couvert.
+ *
+ *   1 — le catalogue ESME
+ *   2 — une formation voisine, à adapter
+ *   3 — une école du groupe IONIS
+ *
+ * `null` quand aucune famille ne couvre le besoin de façon significative.
+ *
+ * Le rang et le pourcentage sont deux informations distinctes, et c'est voulu.
+ * Le pourcentage dit **combien** le besoin est couvert ; le rang dit **par
+ * quoi**. Les mélanger en un seul nombre — ce que faisait la moyenne pondérée
+ * — rendait indiscernables « bien couvert par le groupe » et « moyennement
+ * couvert par notre catalogue », qui n'appellent pas la même décision.
+ */
+export type RangMatching = 1 | 2 | 3 | null;
+
 export type MatchingOutcome = {
+  /** Par quelle famille le besoin est couvert. */
+  rang: RangMatching;
   scoreCatalogue: number;
   scoreVoisines: number;
   scoreIonis: number;
@@ -249,6 +268,7 @@ export function runMatching(
 
   if (active.length === 0) {
     return {
+      rang: null,
       scoreCatalogue: 0, scoreVoisines: 0, scoreIonis: 0, scoreGlobal: 0,
       weights,
       isFormation: false,
@@ -414,46 +434,46 @@ export function runMatching(
   );
 
   /**
-   * Score global : la meilleure voie pour répondre, non la moyenne des voies.
+   * Pourcentage de matching, et rang de la famille qui le fournit.
    *
-   * C'était une moyenne pondérée des trois familles, et c'était faux. La
-   * question que ce nombre doit trancher est « à quel point pouvons-nous
-   * répondre à ce marché ? ». Y répondre par une moyenne fait diluer la force
-   * d'une famille par la faiblesse des autres, qui parlent d'autre chose.
+   * Le pourcentage est la **couverture réelle** par la famille la mieux
+   * placée : ni moyenne, ni remise selon la famille. Une couverture de
+   * soixante-dix pour cent par une école du groupe est une couverture de
+   * soixante-dix pour cent, et c'est le rang — 3 — qui dit qu'il faudra un
+   * partenariat pour la mobiliser.
    *
-   * Mesuré : un marché de formation au management de projet, dont le
-   * catalogue couvre l'objet à 46 — PROJ 100 « Les fondamentaux du management
-   * de projets complexes » en tête — ressortait à 38, parce que les formations
-   * voisines (29) et le groupe IONIS (18) tiraient la moyenne vers le bas. Un
-   * marché en plein cœur de catalogue ne pouvait structurellement pas marquer
-   * haut, et le nombre affiché démentait le classement, qui était juste.
+   * Ce nombre a eu deux formes fausses avant celle-ci. D'abord une moyenne
+   * pondérée des trois familles, qui faisait diluer la force de l'une par la
+   * faiblesse des autres : un marché couvert à 46 par le catalogue ressortait
+   * à 38 parce que les voisines et IONIS tiraient vers le bas. Puis une
+   * meilleure famille assortie d'une remise de préférence, qui mélangeait
+   * encore deux questions en un chiffre. Séparer le combien du par-quoi règle
+   * les deux.
    *
-   * On prend donc la meilleure famille, plus une fraction de la deuxième :
-   * disposer de plusieurs sources est un atout réel — on peut composer une
-   * réponse — mais cela ne vaut pas une seconde couverture pleine.
+   * Ce nombre ne décide de rien. Le GO et le NO GO appartiennent à la
+   * personne qui regarde la fiche ; le moteur mesure, il ne tranche pas.
+   */
+  /**
+   * Les pondérations ne pilotent plus le pourcentage.
    *
-   * La préférence entre familles subsiste, et c'est à cela que servent les
-   * pondérations : à couverture égale, notre propre catalogue vaut mieux
-   * qu'une formation à adapter ou qu'un partenariat avec une école du groupe.
-   * Elle module de trente pour cent au plus. Une préférence ne disqualifie
-   * pas : mobiliser EPITA sur un marché de cybersécurité est une vraie
-   * réponse, pas un pis-aller à diviser par quatre.
-   *
-   * Ce nombre ne décide de rien. L'appréciation — cœur de catalogue, proche,
-   * dans le périmètre — se lit sur `scoreCatalogue` face à ses seuils, et
-   * reste donc inchangée : ce correctif ne peut pas ramener de faux positifs.
+   * Elles sont conservées sur le résultat, parce qu'une appréciation doit
+   * pouvoir se relire avec les réglages du jour où elle a été calculée. Mais
+   * la préférence entre familles est désormais portée par le rang, qui la dit
+   * en clair plutôt que de l'enfouir dans un coefficient — et un réglage qui
+   * n'influe plus sur rien mérite d'être signalé, pas laissé à croire actif.
    */
   const normalized = normalize(weights);
-  const familles = [
-    { score: scoreCatalogue, poids: normalized.catalogue },
-    { score: scoreVoisines, poids: normalized.voisines },
-    { score: scoreIonis, poids: normalized.ionis },
+
+  const familles: { rang: 1 | 2 | 3; score: number }[] = [
+    { rang: 1, score: scoreCatalogue },
+    { rang: 2, score: scoreVoisines },
+    { rang: 3, score: scoreIonis },
   ];
-  const referencePoids = Math.max(...familles.map((f) => f.poids)) || 1;
-  const effectifs = familles
-    .map((f) => f.score * (0.7 + 0.3 * (f.poids / referencePoids)))
-    .sort((a, b) => b - a);
-  const scoreGlobal = Math.round(Math.min(97, effectifs[0] + 0.15 * (effectifs[1] ?? 0)));
+  const meilleure = familles.reduce((a, b) => (b.score > a.score ? b : a));
+  const scoreGlobal = Math.round(meilleure.score);
+  // En dessous du seuil de la famille la plus permissive, aucune famille ne
+  // couvre réellement : annoncer un rang serait annoncer une ressource.
+  const rang: RangMatching = meilleure.score >= SEUIL_VOISINES ? meilleure.rang : null;
 
   // Compétences demandées : concepts repérés dans la consultation, couverts ou non.
   const topMatches = scored.filter((item) => item.score >= 35).slice(0, 10);
@@ -542,6 +562,7 @@ export function runMatching(
   }
 
   return {
+    rang,
     scoreCatalogue,
     scoreVoisines,
     scoreIonis,

@@ -1,4 +1,4 @@
-import { Clock, Play, Radar } from "lucide-react";
+import { Clock, Download, Play, Radar, Upload } from "lucide-react";
 
 import { ActionButton, ActionForm } from "@/components/app/action-form";
 import Link from "next/link";
@@ -9,8 +9,8 @@ import { requireSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { can } from "@/lib/rbac";
 import {
-  connectorStatusLabels, formatAmount, formatDate, formatDateTime, natureLabels, natureOrder,
-  natureTone,
+  connectorStatusLabels, formatAmount, formatDate, formatDateTime, goNoGoLabels, natureLabels,
+  natureOrder, natureTone, stageLabels, stageOrder,
 } from "@/lib/labels";
 import { getSetting } from "@/lib/settings";
 
@@ -26,6 +26,7 @@ export default async function VeillePage({
   const params = await searchParams;
   const canRun = can(session.role, "veille.run");
   const canConfigure = can(session.role, "veille.configure");
+  const canImporter = can(session.role, "tender.create");
 
   // Fenêtre d'affichage des avis récupérés : tout ce que la veille a ramené
   // reste accessible, sans aucun pré-filtrage par pertinence.
@@ -76,12 +77,23 @@ export default async function VeillePage({
         title="Veille des consultations"
         subtitle={`${operational.length} connecteur(s) opérationnel(s) sur ${connectors.length}. Synchronisation quotidienne prévue à ${settings.dailyHour} h (${settings.timezone}).`}
         actions={
-          lastRun ? (
-            <span className="flex items-center gap-1.5 text-[13px] text-ink-500">
-              <Clock className="size-3.5" aria-hidden />
-              Dernière synchronisation : {formatDateTime(lastRun.startedAt)}
-            </span>
-          ) : null
+          <>
+            {lastRun ? (
+              <span className="flex items-center gap-1.5 text-[13px] text-ink-500">
+                <Clock className="size-3.5" aria-hidden />
+                Dernière synchronisation : {formatDateTime(lastRun.startedAt)}
+              </span>
+            ) : null}
+            {canImporter ? (
+              <Link
+                href="/veille/import"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-ink-300 bg-white px-3 text-[13px] text-esme-800 hover:border-esme-400 hover:bg-esme-50"
+              >
+                <Upload className="size-3.5" aria-hidden />
+                Importer un tableau
+              </Link>
+            ) : null}
+          </>
         }
       />
 
@@ -222,6 +234,140 @@ export default async function VeillePage({
               </tbody>
             </Table>
           )}
+        </Card>
+
+        {/* --- Export --- */}
+        <Card>
+          <CardHeader
+            title="Exporter la veille"
+            subtitle="Le portefeuille tel qu'il est, filtré comme vous l'entendez, en CSV ou en classeur. Les champs laissés vides ne filtrent rien."
+          />
+          {/*
+            Formulaire en GET : un téléchargement n'est pas une mutation, et
+            l'adresse produite porte les filtres — elle se met en favori, se
+            partage, se rejoue le mois suivant.
+          */}
+          <form method="get" action="/api/veille/export" className="space-y-4 p-5">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Field label="Publié à partir du">
+                <Input type="date" name="publieDu" />
+              </Field>
+              <Field label="Publié jusqu'au">
+                <Input type="date" name="publieAu" />
+              </Field>
+              <Field label="Remise des plis à partir du">
+                <Input type="date" name="remiseDu" />
+              </Field>
+              <Field label="Remise des plis jusqu'au">
+                <Input type="date" name="remiseAu" />
+              </Field>
+
+              <Field label="Montant minimum (€ HT)" hint="Sur le montant maximum s'il est connu, sinon le minimum.">
+                <Input type="number" name="montantMin" min={0} step={1000} inputMode="numeric" />
+              </Field>
+              <Field label="Montant maximum (€ HT)">
+                <Input type="number" name="montantMax" min={0} step={1000} inputMode="numeric" />
+              </Field>
+              <Field label="Acheteur" hint="Fragment du nom : « Rouen » retient la métropole et le CHU.">
+                <Input name="client" placeholder="RTE, Ministère, CNRS…" />
+              </Field>
+              <Field label="Objet" hint="Cherché dans l'intitulé et le résumé.">
+                <Input name="objet" placeholder="cybersécurité, management…" />
+              </Field>
+
+              <Field label="Appréciation">
+                <select
+                  name="nature"
+                  defaultValue=""
+                  className="h-10 w-full rounded-lg border border-ink-300 bg-white px-3 text-sm"
+                >
+                  <option value="">Toutes</option>
+                  {natureOrder.map((nature) => (
+                    <option key={nature} value={nature}>{natureLabels[nature]}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Score de matching minimum">
+                <Input type="number" name="scoreMin" min={0} max={100} inputMode="numeric" />
+              </Field>
+              <Field label="Étape du pipeline">
+                <select
+                  name="etape"
+                  defaultValue=""
+                  className="h-10 w-full rounded-lg border border-ink-300 bg-white px-3 text-sm"
+                >
+                  <option value="">Toutes</option>
+                  {stageOrder.map((etape) => (
+                    <option key={etape} value={etape}>{stageLabels[etape]}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Décision">
+                <select
+                  name="decision"
+                  defaultValue=""
+                  className="h-10 w-full rounded-lg border border-ink-300 bg-white px-3 text-sm"
+                >
+                  <option value="">Toutes</option>
+                  {Object.entries(goNoGoLabels).map(([valeur, libelle]) => (
+                    <option key={valeur} value={valeur}>{libelle}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Source">
+                <select
+                  name="source"
+                  defaultValue=""
+                  className="h-10 w-full rounded-lg border border-ink-300 bg-white px-3 text-sm"
+                >
+                  <option value="">Toutes</option>
+                  {connectors.map((connector) => (
+                    <option key={connector.key} value={connector.key}>{connector.name}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Créées depuis (jours)" hint="Laissez vide pour tout l'historique.">
+                <Input type="number" name="depuisJours" min={1} max={3650} inputMode="numeric" />
+              </Field>
+              <div className="flex flex-col justify-end gap-2 pb-1 sm:col-span-2">
+                <label className="flex items-center gap-2 text-[13px] text-ink-700">
+                  <input type="checkbox" name="archivees" value="1" className="size-4 accent-[var(--color-esme-600)]" />
+                  Inclure les affaires archivées
+                </label>
+                <label className="flex items-center gap-2 text-[13px] text-ink-700">
+                  <input type="checkbox" name="demo" value="1" className="size-4 accent-[var(--color-esme-600)]" />
+                  Inclure les fiches de démonstration
+                </label>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 pt-4">
+              <button
+                type="submit"
+                name="format"
+                value="xlsx"
+                className="inline-flex h-10 items-center gap-1.5 rounded-full bg-esme-600 px-4 text-[13px] font-medium text-white hover:bg-esme-700"
+              >
+                <Download className="size-4" aria-hidden />
+                Classeur Excel (.xlsx)
+              </button>
+              <button
+                type="submit"
+                name="format"
+                value="csv"
+                className="inline-flex h-10 items-center gap-1.5 rounded-full border border-ink-300 bg-white px-4 text-[13px] font-medium text-esme-800 hover:border-esme-400 hover:bg-esme-50"
+              >
+                <Download className="size-4" aria-hidden />
+                CSV
+              </button>
+              <p className="text-[12px] leading-snug text-ink-500">
+                Le classeur porte de vraies dates et de vrais nombres, avec le filtre automatique
+                posé : il se trie et se somme. Le CSV s&apos;ouvre partout. Chaque export est
+                journalisé, et plafonné à 5 000 lignes.
+              </p>
+            </div>
+          </form>
         </Card>
 
         {/* --- Connecteurs --- */}

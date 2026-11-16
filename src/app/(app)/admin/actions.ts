@@ -192,6 +192,7 @@ export async function createUserAction(formData: FormData): Promise<ActionState>
     });
 
     revalidatePath("/admin");
+    revalidatePath("/admin/comptes");
     return { ok: true, message: `Compte ${user.email} créé. Communiquez le mot de passe par un canal sûr.` };
   } catch (error) {
     return fail(error);
@@ -220,6 +221,7 @@ export async function updateUserRoleAction(userId: string, role: string): Promis
     });
 
     revalidatePath("/admin");
+    revalidatePath("/admin/comptes");
     return { ok: true, message: "Rôle mis à jour." };
   } catch (error) {
     return fail(error);
@@ -245,6 +247,7 @@ export async function toggleUserActiveAction(userId: string, active: boolean): P
     });
 
     revalidatePath("/admin");
+    revalidatePath("/admin/comptes");
     return { ok: true, message: `Compte ${active ? "réactivé" : "désactivé"}.` };
   } catch (error) {
     return fail(error);
@@ -277,6 +280,7 @@ export async function resetPasswordAction(userId: string, formData: FormData): P
     });
 
     revalidatePath("/admin");
+    revalidatePath("/admin/comptes");
     return { ok: true, message: "Mot de passe mis à jour." };
   } catch (error) {
     return fail(error);

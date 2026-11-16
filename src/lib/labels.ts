@@ -120,7 +120,7 @@ export const boardColumnHints: Partial<Record<BoardColumnKey, string>> = {
   AO_IDENTIFIES:
     "Tout ce qui n'est pas tranché : repéré par la veille, reconnu cœur de catalogue, ou en attente d'arbitrage. Filtrez par appréciation pour trier.",
   PREPARATION: "Les GO sont ici : décider de répondre ouvre la préparation.",
-  NO_GO: "Décision prise : nous ne répondons pas. Le motif est consigné sur la fiche.",
+  NO_GO: "Décision prise : nous ne répondons pas. Déposez une carte ici pour l'écarter ; le motif est facultatif.",
   REJETE_NON_POURSUIVI: "Sorties du pipeline sans décision formelle de No Go.",
 };
 

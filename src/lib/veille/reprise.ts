@@ -114,7 +114,7 @@ function motsObjet(objet: string): string[] {
   )].slice(0, 4);
 }
 
-async function boampParIdweb(idweb: string): Promise<NormalizedNotice | null> {
+export async function boampParIdweb(idweb: string): Promise<NormalizedNotice | null> {
   const url = new URL(BOAMP);
   url.searchParams.set("where", `idweb = "${idweb}"`);
   url.searchParams.set("limit", "1");
@@ -164,7 +164,7 @@ async function boampRecherche(ligne: Ligne, parRequete = 20): Promise<Normalized
   return [...vus.values()];
 }
 
-async function tedParNumeros(numeros: string[]): Promise<NormalizedNotice[]> {
+export async function tedParNumeros(numeros: string[]): Promise<NormalizedNotice[]> {
   if (numeros.length === 0) return [];
   const reponse = await fetch(TED, {
     method: "POST",

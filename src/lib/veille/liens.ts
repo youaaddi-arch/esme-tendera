@@ -27,6 +27,16 @@
  * Cette lecture vivait dans un script de préparation, à côté du dépôt. Elle
  * est ici pour être testée, et pour que la route accepte les lignes du tableau
  * telles quelles, lien compris.
+ *
+ * Les liens directs vers la source sont lus aussi, et il a fallu y venir :
+ * un tableau tenu à la main porte le plus souvent l'adresse du BOAMP ou de
+ * TED, pas celle d'un agrégateur. Sans eux, l'import ne retrouvait pas
+ * l'identifiant, créait la fiche sans lui, et la veille recréait l'avis en
+ * double la semaine suivante.
+ *
+ *   boamp.fr/avis/detail/26-94667             → BOAMP 26-94667
+ *   boamp.fr/…?q=idweb:"26-94667"             → BOAMP 26-94667
+ *   ted.europa.eu/fr/notice/-/detail/725368-2026 → TED 725368-2026
  */
 export function identifiantDepuisLien(lien: string): { source: "BOAMP" | "TED"; identifiant: string } | null {
   if (!lien) return null;
@@ -41,6 +51,27 @@ export function identifiantDepuisLien(lien: string): { source: "BOAMP" | "TED"; 
   // Forme agrégée : l'année est collée au numéro.
   const agrege = lien.match(/boamp(\d{2})(\d{4,7})\b/i);
   if (agrege) return { source: "BOAMP", identifiant: `${agrege[1]}-${Number(agrege[2])}` };
+
+  // Lien direct TED : le numéro d'avis porte son année, séparée.
+  if (/ted\.europa\.eu/i.test(lien)) {
+    const ted = lien.match(/(\d{1,8})-(20\d\d)/);
+    if (ted) return { source: "TED", identifiant: `${Number(ted[1])}-${ted[2]}` };
+  }
+
+  // Lien direct BOAMP : l'identifiant y est déjà sous sa forme officielle,
+  // dans le chemin ou dans le paramètre `idweb`, parfois encodé.
+  if (/boamp\.fr/i.test(lien)) {
+    // Une adresse recopiée à la main peut porter un « % » solitaire, qui fait
+    // lever `decodeURIComponent` : on se contente alors de la forme brute.
+    let decode = lien;
+    try {
+      decode = decodeURIComponent(lien);
+    } catch {
+      decode = lien;
+    }
+    const boamp = decode.match(/\b(\d{2}-\d{3,7})\b/);
+    if (boamp) return { source: "BOAMP", identifiant: boamp[1] };
+  }
 
   return null;
 }
